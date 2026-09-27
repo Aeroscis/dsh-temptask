@@ -1,6 +1,6 @@
 {
   "name": "@aeroscis/dsh-temptask",
-  "version": "0.3.1",
+  "version": "0.3.3",
   "description": "DSH 临时任务模式：为 DSH 增加「任务」分组——不绑定任何长期工作空间，自动在任务根目录下创建隔离的临时工作目录并开启会话，即开即用、用完即弃。Temporary task mode for DeepSeek Harness.",
   "type": "module",
   "main": "lib/index.js",
@@ -58,16 +58,14 @@
     "smoke": "npm run smoke:host && npm run smoke:client",
     "smoke:host": "node scripts/smoke.mjs",
     "smoke:client": "node scripts/smoke-client.mjs",
-    "check": "npm run typecheck && npm run build && npm run check:pack && npm run smoke"
+    "check:registration": "node scripts/check-registration.mjs",
+    "check": "npm run typecheck && npm run build && npm run check:pack && npm run smoke && npm run check:registration"
   },
   "dsh": {
     "bundle": {
       "patch": "./cordis.patch.yml"
     },
     "client": {
-      "inject": [
-        "@deepseek-ai/dsh-client-ui-primitives"
-      ],
       "platform": "web"
     }
   },

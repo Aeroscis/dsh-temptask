@@ -3,11 +3,13 @@
  *
  * 验证的不是「逻辑」而是「包能不能被 DSH 的浏览器端接起来」：
  *   1. client/client.js 以 ModuleLoader 形式注册了 id/factory；
- *   2. 工厂只依赖平台 seed 模块 react（require 其它模块即为契约漂移，直接失败）；
- *   3. 导出带 inject/apply，apply 注册：侧边栏那一行（sidebar.panellist）、
- *      同名的**空**面板（main，兜底，绝不出页面）、浮层（shell.overlay ×2：气泡 + 守护）、
- *      设置卡片（settings.section）；
- *   4. 那一行按确认过的 UI 渲染：「临时任务」+ ＋/🧹/⧉/? 四个小按钮；窄栏只留图标；
+ *   2. 工厂只依赖平台 seed 模块 react（require 其它模块即为契约漂移，直接失败）——
+ *      图标是自绘 SVG，宿主图标包（0.1.7 起改过导出名）不再是本包的依赖；
+ *   3. 导出带 inject/apply，apply 注册：侧边栏那一行（sidebar.panellist，order 取负值
+ *      以排在官方「插件」面板行之前）、同名的**空**面板（main，兜底，绝不出页面）、
+ *      浮层（shell.overlay ×2：气泡 + 守护）、设置卡片（settings.section）；
+ *   4. 那一行按确认过的 UI 渲染：「临时任务」+ 清理/打开/说明/设置四个小按钮，每个字形
+ *      都带 `data-tt-icon` 标记（自绘，因此不随宿主图标改名而变形）；窄栏只留图标；
  *   5. 行的 label 是 i18n thunk：切换语言后再取必须得到另一种语言；
  *   6. 浮层：关闭时渲染 null，help 显示说明，notice 显示错误；
  *   7. settingsScope / locale 缺失时各自降级。
@@ -28,6 +30,8 @@ function check(label, fn) {
 }
 
 /* ── 1. 以浏览器的方式装载包 ── */
+const packageJson = JSON.parse(await readFile(new URL('../package.json', import.meta.url), 'utf8'));
+
 let registration;
 globalThis.window = {
   __ModuleLoader__: {
@@ -39,50 +43,41 @@ globalThis.window = {
 
 await import('../client/client.js');
 
-check('client.js 通过 window.__ModuleLoader__.load 注册', () => {
+check('client.js 通过 window.__ModuleLoader__.load 以**包名**注册', () => {
   assert.ok(registration !== undefined, 'bundle 没有注册工厂');
-  assert.equal(registration.id, 'dsh-temptask');
+  // 宿主 dsh-client-modules 用加载器条目名（= package.json 的 name）当图行 id，
+  // 装载后按这个 id 查 factories。写成短名（dsh-temptask）会让整批 combo 脚本失败：
+  // "bundle … loaded without registering \"@aeroscis/dsh-temptask\""。
+  assert.equal(
+    registration.id,
+    packageJson.name,
+    `注册 id 必须等于包名（宿主按包名找工厂）`,
+  );
   assert.equal(typeof registration.factory, 'function');
 });
 
 const requiredModules = new Set();
 
-/** 官方图标集的替身：每个图标渲染成带 data-official 标记的 svg，方便断言"确实用了官方图标"。 */
-function makeOfficialIcon(name) {
-  return (props = {}) =>
-    React.createElement('svg', {
-      'data-official': name,
-      width: props.size ?? 16,
-      height: props.size ?? 16,
-    });
-}
-
-const fakePrimitives = {
-  IconFolderOpenOutline16: makeOfficialIcon('IconFolderOpenOutline16'),
-  IconNewChatOutline16: makeOfficialIcon('IconNewChatOutline16'),
-  IconTrashOutline16: makeOfficialIcon('IconTrashOutline16'),
-  IconPlusOutline16: makeOfficialIcon('IconPlusOutline16'),
-  IconLoadingOutline16: makeOfficialIcon('IconLoadingOutline16'),
-  IconCopyOutline16: makeOfficialIcon('IconCopyOutline16'),
-  IconQuestionOutline14: makeOfficialIcon('IconQuestionOutline14'),
-  IconCheckOutline16: makeOfficialIcon('IconCheckOutline16'),
-  IconSettingsOutline16: makeOfficialIcon('IconSettingsOutline16'),
-  IconRightUpOutline16: makeOfficialIcon('IconRightUpOutline16'),
-};
-
+/**
+ * 工厂的 require：平台只 seed 了 react。
+ *
+ * 这里**故意**对其它模块抛错——本包在 0.3.3 起不再 require 宿主的图标包
+ * （`@deepseek-ai/dsh-client-ui-primitives`，其图标导出名在 0.1.7 里从 `…Outline16`
+ * 改成 `…OutlineRegular|Medium`，老名字取不到会静默降级成 emoji）。若哪天产物里又冒出
+ * 对宿主包的 require，这条桩会立刻把构建打回原形。
+ */
 function factoryRequire(spec) {
   requiredModules.add(spec);
   if (spec === 'react') return React;
-  if (spec === '@deepseek-ai/dsh-client-ui-primitives') return fakePrimitives;
-  throw new Error(`require("${spec}") 不在平台 seed 表中`);
+  throw new Error(`require("${spec}") 不在平台 seed 表中（本包只允许 require react）`);
 }
 
 const mod = registration.factory(factoryRequire);
 
-check('工厂只 require react + 官方图标集（无未声明的模块依赖）', () => {
+check('工厂只 require react（图标已自绘，不再依赖宿主图标包）', () => {
   assert.deepEqual(
-    [...requiredModules].sort(),
-    ['@deepseek-ai/dsh-client-ui-primitives', 'react'].sort(),
+    [...requiredModules],
+    ['react'],
     `实际 require：${[...requiredModules].join(', ')}`,
   );
 });
@@ -185,6 +180,16 @@ check('apply 注册：侧边栏那一行 / 兜底空面板 / 浮层 ×2 / 设置
   assert.ok(overlayOf('dsh-temptask-pending-open') !== undefined);
 });
 
+check('面板行的 order 取负值：排到官方「插件」面板行（order 0）前面，紧贴「新建会话」', () => {
+  const order = entryOf('sidebar.panellist').options.order;
+  assert.equal(typeof order, 'number', 'order 必须显式给出：官方按它升序渲染面板列表');
+  assert.ok(
+    order < 0,
+    `order 必须 < 0：0.1.7 起官方自己注册了「插件」面板行（id "plugins"、order 0），` +
+      `取正数就会被它压在上面，本行贴不到「新建会话」正下方（当前 ${order}）`,
+  );
+});
+
 check('那一行的 label 是 i18n thunk：切换语言后再取必须跟着变', () => {
   const label = entryOf('sidebar.panellist').options.label;
   assert.equal(typeof label, 'function', 'label 必须是 thunk');
@@ -228,7 +233,7 @@ const runtime = {
   notice: () => {},
 };
 
-check('宽栏那一行：主区整块可点=新建 + 右侧四个次要按钮，且用的是官方图标集', () => {
+check('宽栏那一行：主区整块可点=新建 + 右侧四个次要按钮，字形全部自绘', () => {
   const row = entryOf('sidebar.panellist').component;
   const markup = render(row, { size: 16, active: false });
 
@@ -263,18 +268,34 @@ check('宽栏那一行：主区整块可点=新建 + 右侧四个次要按钮，
     markup.includes('data-tt-mark="temporary"'),
     '主区应使用自绘的「临时任务」标记（＋ 辨识度低，且窄栏下与官方新建会话分不清）',
   );
-  for (const name of [
-    'IconTrashOutline16',
-    'IconCopyOutline16',
-    'IconQuestionOutline14',
-    'IconSettingsOutline16',
-  ]) {
-    assert.ok(markup.includes(`data-official="${name}"`), `应使用官方图标 ${name}\n${markup}`);
+  // 行内字形一律自绘：`data-tt-icon` 是它们的记号。宿主图标包改名（0.1.7 把 …Outline16
+  // 改成 …OutlineRegular|Medium）不该再影响这里，所以断言只认自己的记号。
+  for (const name of ['trash', 'copy', 'help', 'settings']) {
+    assert.ok(markup.includes(`data-tt-icon="${name}"`), `应使用自绘字形 ${name}\n${markup}`);
   }
+  assert.equal(markup.includes('data-official='), false, '不该再引用宿主图标包的图标');
   assert.equal(markup.includes('＋'), false, '不应再出现细笔画的文本加号');
+  assert.equal(markup.includes('🧹'), false, '不应再出现 🧹 这类当兜底的 emoji 字形');
 });
 
 const bundleSource = await readFile(new URL('../client/client.js', import.meta.url), 'utf8');
+
+check('构建产物只注册一次，且 id 就是包名（回归：短名会让整批插件加载失败）', () => {
+  const loads = bundleSource.match(/__ModuleLoader__\.load\(/gu) ?? [];
+  assert.equal(loads.length, 1, `bundle 应恰好调用一次 __ModuleLoader__.load，实际 ${loads.length} 次`);
+  const header = `__ModuleLoader__.load({`;
+  const head = bundleSource.slice(bundleSource.indexOf(header), bundleSource.indexOf(header) + 200);
+  assert.ok(
+    head.includes(`id: ${JSON.stringify(packageJson.name)}`),
+    `构建产物里的注册 id 必须等于 package.json 的 name（${packageJson.name}），实际头部：${head}`,
+  );
+  assert.equal(
+    head.includes(`id: "dsh-temptask"`),
+    false,
+    '不该再出现短名 dsh-temptask 作为注册 id（那是设置命名空间/目录名，不是模块 id）',
+  );
+});
+
 check('构建产物里带着「只在本行隐藏官方 title」的样式（防重复标签）', () => {
   assert.ok(
     bundleSource.includes(':has(.__tt_row)'),
@@ -297,27 +318,34 @@ check('构建产物里带着「只在本行隐藏官方 title」的样式（防�
   );
 });
 
-const packageJson = JSON.parse(await readFile(new URL('../package.json', import.meta.url), 'utf8'));
-check('package.json 声明了客户端依赖，保证官方图标集先于本包到达', () => {
-  assert.deepEqual(packageJson.dsh.client.inject, ['@deepseek-ai/dsh-client-ui-primitives']);
+check('package.json 不再声明宿主图标包依赖（图标自绘，client 只需要 platform: web）', () => {
   assert.equal(packageJson.dsh.client.platform, 'web');
+  assert.equal(
+    packageJson.dsh.client.inject,
+    undefined,
+    'inject 只用于「先加载哪个 client 包」的排序；图标自绘后本包不再需要它，' +
+      '留着一个用不到的条目反而会在宿主移除该包时拖垮加载（computer-user 就是只写 platform 的先例）',
+  );
 });
 
-check('官方图标集缺席时退回文本字形（少一个图标不能让 UI 挂掉）', () => {
-  const bareMod = registration.factory((spec) => {
-    if (spec === 'react') return React;
-    throw new Error('primitives 不在图里');
-  });
-  const barePlugin = typeof bareMod?.apply === 'function' ? bareMod : bareMod?.default;
-  const bare = createClientStub();
-  barePlugin.apply(bare.ctx);
-  const entry = bare.registrations.find((item) => item.options.name === 'sidebar.panellist');
-  assert.ok(entry !== undefined, '降级时那一行仍然要注册');
-  const markup = render(entry.component, { size: 16, active: false });
-  assert.ok(markup.includes('临时任务'), markup);
-  assert.ok(markup.includes('🧹') && markup.includes('?'), `应退回文本字形\n${markup}`);
-  assert.ok(markup.includes('data-tt-mark="temporary"'), '自绘标记不依赖官方图标集，任何情况下都在');
-  assert.equal((markup.match(/<button/gu) ?? []).length, 4, '四个次要按钮仍然要在');
+check('宿主图标包改名的回归：产物里不再 require 它', () => {
+  // 注释里提到包名是允许的（说明"为什么不再用它"），这里卡的是**真的调用**。
+  const calls = bundleSource.match(/require\(\s*["'][^"']+["']\s*\)/gu) ?? [];
+  assert.deepEqual(
+    [...new Set(calls)].sort(),
+    ['require("react")'],
+    `产物的 require 只允许 react（图标自绘后宿主图标包不再是依赖），实际：${calls.join(', ')}`,
+  );
+});
+
+check('自绘字形不依赖任何外部资源：每个按钮都渲染出内联 svg', () => {
+  const row = entryOf('sidebar.panellist').component;
+  const markup = render(row, { size: 16, active: false });
+  // 主区 1 枚 + 次要动作 4 枚 = 5 枚自绘 svg（图标是 data-tt-icon / data-tt-mark 标记的）
+  const glyphs = (markup.match(/data-tt-(?:icon|mark)=/gu) ?? []).length;
+  assert.equal(glyphs, 5, `应有 5 枚自绘字形（主区 + 四个按钮），实际 ${glyphs}\n${markup}`);
+  assert.equal(markup.includes('<img'), false, '不该有外链图片');
+  assert.equal(markup.includes('http'), false, '不该有外链 URL');
 });
 
 check('窄栏那一行：只留主区图标（无文字、无次要按钮）', () => {
@@ -519,12 +547,12 @@ check('第三号按钮：能打开文件夹就「打开根目录」，否则退�
   const row = entryOf('sidebar.panellist').component;
   const openable = render(row, { size: 16, active: false, canOpenPath: true });
   assert.ok(openable.includes('aria-label="打开任务根目录"'), openable);
-  assert.ok(openable.includes('data-official="IconRightUpOutline16"'), '打开用官方"外部打开"图标');
+  assert.ok(openable.includes('data-tt-icon="open"'), '打开用自绘的"外部打开"箭头');
   assert.equal(openable.includes('aria-label="复制任务根目录"'), false, '能打开时不再占一个复制按钮');
 
   const notOpenable = render(row, { size: 16, active: false, canOpenPath: false });
   assert.ok(notOpenable.includes('aria-label="复制任务根目录"'), notOpenable);
-  assert.ok(notOpenable.includes('data-official="IconCopyOutline16"'), notOpenable);
+  assert.ok(notOpenable.includes('data-tt-icon="copy"'), notOpenable);
 });
 
 check('悬浮详情自动收起的延迟是 450ms（600ms 偏慢）', () => {

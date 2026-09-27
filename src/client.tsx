@@ -4,11 +4,13 @@
  * 构建产物：`client/client.js`（ModuleLoader 包，见 scripts/build-client.mjs）。
  *
  * 形态（与用户确认过的 UI 一致）：
- *   - 侧边栏**一行**：「🗂 临时任务」+ 四个小 pushbutton（＋ 新建 / 🧹 清理 / ⧉ 复制根目录 / ? 说明），
- *     位置在「新建会话」按钮与工作区列表之间；**点击标签不会有任何页面**。
+ *   - 侧边栏**一行**：自绘的「🗂 临时任务」标记 + 四个小 pushbutton（清理 / 打开或复制根目录 /
+ *     说明 / 设置），行内每个字形都是本插件自己画的 SVG（见下面「图标」一节）；
+ *     位置在「新建会话」按钮正下方——注册 `order` 取负值，排在官方「插件」面板行（order 0）之前；
+ *     **点击标签不会有任何页面**。
  *   - 任务列表不归本插件渲染：每个任务就是一个临时工作区，官方的
  *     WorkspaceBrowser 负责「任务节点 → 它的会话」那棵树（展开/归档/重命名/搜索/拖拽全原生）。
- *   - ? 说明是锚在该行下方的小气泡；🧹 是居中确认框；两者都渲染在 `shell.overlay` 浮层里
+ *   - ? 说明是锚在该行下方的小气泡；垃圾桶按钮是居中确认框；两者都渲染在 `shell.overlay` 浮层里
  *     （不会被侧边栏的滚动容器裁掉，也不会嵌套进官方那个 <button>）。
  *
  * 两个必须知道的实现细节：
@@ -43,7 +45,7 @@ const API = '/dsh-temptask/api';
  * 纯客户端改动（比如这一版只调了 UI）host 版本号不变，气泡里并排显示两半，
  * 才能判断"到底是哪半边还是旧的"。
  */
-const CLIENT_VERSION = '0.3.1';
+const CLIENT_VERSION = '0.3.3';
 
 /**
  * `?` 气泡的"鼠标离开后自动收起"延迟（毫秒）。
@@ -51,63 +53,13 @@ const CLIENT_VERSION = '0.3.1';
  */
 const TRAY_AUTO_CLOSE_MS = 450;
 
-/** ModuleLoader 工厂注入的 require：本模块体在工厂内执行，运行期解析为那个参数。 */
-declare const require: (spec: string) => unknown;
-
-/** 官方图标组件的形状（本插件只用到 size / className）。 */
-type IconComponent = (props: { size?: number; className?: string }) => React.ReactElement;
-
-interface OfficialIcons {
-  folder?: IconComponent;
-  newChat?: IconComponent;
-  plus?: IconComponent;
-  loading?: IconComponent;
-  trash?: IconComponent;
-  copy?: IconComponent;
-  question?: IconComponent;
-  check?: IconComponent;
-  settings?: IconComponent;
-  external?: IconComponent;
-}
-
 /**
- * 取官方图标集（`@deepseek-ai/dsh-client-ui-primitives`，即官方「新建会话」按钮用的那一套）。
- *
- * 为什么用它：文本符号（＋ ⧉ ?）的笔画比官方图标细得多，塞进 28px 按钮里显得"没吃饭"。
- * 那套图标本来就在浏览器依赖图里（本包 `dsh.client.inject` 声明了它，保证先于本包到达），
- * 直接复用最省事，而且和全站观感一致。
- *
- * 取不到时（老宿主 / 图里没有这一行）退回到确认过的文本字形，绝不因为少一个图标就挂掉。
+ * 四个动作按钮用本插件自绘的 SVG（见下面「图标」一节）：**不再 require 宿主的
+ * `@deepseek-ai/dsh-client-ui-primitives`**——那个包的图标导出名在 0.1.7 里从
+ * `<Name>Outline<尺寸>` 改成了 `<Name>OutlineRegular|Medium`，老名字取不到就静默降级成
+ * emoji/文本，于是同一个插件在 0.1.5 的宿主里是线框图标、在 0.1.7 的宿主里变成 🧹 📂 ? ⚙。
+ * 官方自己的插件文档也要求「不要 require 宿主 Client 包」，所以这里自绘一层，名字怎么改都不影响。
  */
-function loadOfficialIcons(): OfficialIcons {
-  let mod: unknown;
-  try {
-    if (typeof require !== 'function') return {};
-    mod = require('@deepseek-ai/dsh-client-ui-primitives');
-  } catch {
-    return {};
-  }
-  if (typeof mod !== 'object' || mod === null) return {};
-  const table = mod as Record<string, unknown>;
-  const pick = (name: string): IconComponent | undefined => {
-    const value = table[name];
-    return typeof value === 'function' ? (value as IconComponent) : undefined;
-  };
-  return {
-    folder: pick('IconFolderOpenOutline16'),
-    newChat: pick('IconNewChatOutline16'),
-    plus: pick('IconPlusOutline16'),
-    loading: pick('IconLoadingOutline16'),
-    trash: pick('IconTrashOutline16'),
-    copy: pick('IconCopyOutline16'),
-    question: pick('IconQuestionOutline14'),
-    check: pick('IconCheckOutline16'),
-    settings: pick('IconSettingsOutline16'),
-    external: pick('IconRightUpOutline16'),
-  };
-}
-
-const ICONS = loadOfficialIcons();
 
 /** 客户端上下文（只列出本插件使用的部分；服务全部按可选获取）。 */
 interface ClientContext {
@@ -527,7 +479,138 @@ function TemporaryTaskMark(props: { size?: number }): React.ReactElement {
   );
 }
 
-/* 四个动作按钮沿用界面字体自带字形（＋ / 🧹 / ⧉ / ?）：这些字形在任何语言下都存在，无需自绘 SVG。 */
+/**
+ * 统一的 16px 线框外壳：`viewBox` 16、`currentColor` 描边、1.4px 线宽（与「临时任务」标记同一规格）。
+ *
+ * `data-tt-icon` 是留给离线渲染自测与人工排查的记号：图标改成自绘之后，测试不能再靠宿主图标包的
+ * `data-official` 标记来判断"现在用的是哪一枚"。
+ */
+function Glyph(props: {
+  name: string;
+  size?: number;
+  className?: string;
+  children: React.ReactNode;
+}): React.ReactElement {
+  const size = props.size ?? 16;
+  return (
+    <svg
+      width={size}
+      height={size}
+      viewBox="0 0 16 16"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth={1.4}
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      className={props.className}
+      data-tt-icon={props.name}
+      aria-hidden="true"
+    >
+      {props.children}
+    </svg>
+  );
+}
+
+/** 清理：垃圾桶（盖 + 桶身 + 两条竖线）。 */
+function IconTrash(props: IconProps): React.ReactElement {
+  return (
+    <Glyph name="trash" size={props.size}>
+      <path d="M2.6 4.6h10.8" />
+      <path d="M6.3 4.6V3.4a.9.9 0 0 1 .9-.9h1.6a.9.9 0 0 1 .9.9v1.2" />
+      <path d="M4.35 4.6l.55 7.9a1.15 1.15 0 0 0 1.15 1.05h3.9a1.15 1.15 0 0 0 1.15-1.05l.55-7.9" />
+      <path d="M6.85 6.9v4.35M9.15 6.9v4.35" />
+    </Glyph>
+  );
+}
+
+/** 打开任务根目录：右上箭头（"甩出去"语义，与官方的外部打开同义）。 */
+function IconRightUp(props: IconProps): React.ReactElement {
+  return (
+    <Glyph name="open" size={props.size}>
+      <path d="M5.4 10.6 10.6 5.4" />
+      <path d="M6.9 5.4h3.7v3.7" />
+    </Glyph>
+  );
+}
+
+/**
+ * 复制（宿主打不开文件夹时的退路，例如浏览器里跑的时候）：前后两张纸。
+ *
+ * 只画后面那张**露在框外**的部分（上边 + 左上角 + 左边 + 左下角 + 底边的一小截），
+ * 否则两张纸的轮廓会在透明背景上互相穿帮。
+ */
+function IconCopy(props: IconProps): React.ReactElement {
+  return (
+    <Glyph name="copy" size={props.size}>
+      <path d="M9.5 6V4.4a1.4 1.4 0 0 0-1.4-1.4H4.1a1.4 1.4 0 0 0-1.4 1.4v4.2a1.4 1.4 0 0 0 1.4 1.4h1.6" />
+      <path d="M7.6 6.2h4.6a1.4 1.4 0 0 1 1.4 1.4v4.6a1.4 1.4 0 0 1-1.4 1.4H7.6a1.4 1.4 0 0 1-1.4-1.4V7.6a1.4 1.4 0 0 1 1.4-1.4z" />
+    </Glyph>
+  );
+}
+
+/** 复制成功：对勾。 */
+function IconCheck(props: IconProps): React.ReactElement {
+  return (
+    <Glyph name="check" size={props.size}>
+      <path d="M3.4 8.5l3 3 6.2-6.7" />
+    </Glyph>
+  );
+}
+
+/** 说明：圈起的问号（外圈 + 问号主体一笔 + 圆点）。 */
+function IconQuestion(props: IconProps): React.ReactElement {
+  return (
+    <Glyph name="help" size={props.size}>
+      <circle cx="8" cy="8" r="5.9" />
+      <path d="M6.3 6.35a1.7 1.7 0 0 1 3.4 0c0 .95-.6 1.35-1.2 1.75-.3.2-.5.45-.5.85v.55" />
+      <path d="M8 11.35v.01" />
+    </Glyph>
+  );
+}
+
+/**
+ * 设置：八齿齿轮 + 中孔。
+ *
+ * 齿的位置是极坐标算出来的（外圈 R=5.45 / 齿谷 r=3.95，每 45° 一齿、齿顶跨 18°），
+ * 所以路径里全是 `A`（圆弧）+ 径向 `L`——手写坐标容易歪，这样至少是几何正确的。
+ */
+function IconSettings(props: IconProps): React.ReactElement {
+  return (
+    <Glyph name="settings" size={props.size}>
+      <path d="M13.38 7.15A5.45 5.45 0 0 1 13.38 8.85L11.90 8.62A3.95 3.95 0 0 1 11.20 10.32L12.41 11.20A5.45 5.45 0 0 1 11.20 12.41L10.32 11.20A3.95 3.95 0 0 1 8.62 11.90L8.85 13.38A5.45 5.45 0 0 1 7.15 13.38L7.38 11.90A3.95 3.95 0 0 1 5.68 11.20L4.80 12.41A5.45 5.45 0 0 1 3.59 11.20L4.80 10.32A3.95 3.95 0 0 1 4.10 8.62L2.62 8.85A5.45 5.45 0 0 1 2.62 7.15L4.10 7.38A3.95 3.95 0 0 1 4.80 5.68L3.59 4.80A5.45 5.45 0 0 1 4.80 3.59L5.68 4.80A3.95 3.95 0 0 1 7.38 4.10L7.15 2.62A5.45 5.45 0 0 1 8.85 2.62L8.62 4.10A3.95 3.95 0 0 1 10.32 4.80L11.20 3.59A5.45 5.45 0 0 1 12.41 4.80L11.20 5.68A3.95 3.95 0 0 1 11.90 7.38Z" />
+      <circle cx="8" cy="8" r="2.05" />
+    </Glyph>
+  );
+}
+
+/** 创建中：缺口圆环（外层套 `__tt_spin` 旋转；不需要任何 keyframes 之外的资源）。 */
+function IconSpinner(props: IconProps): React.ReactElement {
+  return (
+    <Glyph name="busy" size={props.size} className="__tt_spin">
+      <circle cx="8" cy="8" r="5.4" opacity="0.3" />
+      <path d="M8 2.6a5.4 5.4 0 0 1 5.4 5.4" />
+    </Glyph>
+  );
+}
+
+/**
+ * 动作按钮的字形表。
+ *
+ * 为什么是自绘，而不是去 require 宿主的图标包（`@deepseek-ai/dsh-client-ui-primitives`）：
+ * 那个包在 0.1.7-rc.2 里把图标导出名从 `<Name>Outline<尺寸>`（`IconTrashOutline16`）改成了
+ * `<Name>OutlineRegular|Medium`，于是同一份插件代码在 0.1.5 宿主上拿到线框图标、
+ * 在 0.1.7 宿主上 `pick()` 全部落空、静默降级成 🧹 📂 ? ⚙。自绘之后宿主怎么改名都与本插件无关，
+ * 代价是观感要自己对齐官方（16px、currentColor、1.4px 线宽）。
+ */
+const ICONS = {
+  loading: IconSpinner,
+  trash: IconTrash,
+  external: IconRightUp,
+  copy: IconCopy,
+  check: IconCheck,
+  question: IconQuestion,
+  settings: IconSettings,
+} as const;
 
 /* ─────────────────────────── 侧边栏那一行 ─────────────────────────── */
 
@@ -544,7 +627,7 @@ interface RowProps {
 }
 
 /**
- * 面板行内容：`🗂 临时任务            ＋ 🧹 ⧉ ?`
+ * 面板行内容：`🗂 临时任务` │ 四个自绘图标按钮（清理 / 打开或复制根目录 / 说明 / 设置）。
  *
  * 唯一职责是把「标签 + 四个动作」画出来并把点击拦住——**不导航、不出页面**。
  * 所有弹层都由浮层里的 TemptaskTray 呈现（避免嵌套进官方那个 <button>）。
@@ -693,11 +776,7 @@ function TemptaskRow(props: RowProps): React.ReactElement {
         onKeyDown={onPrimaryKey}
       >
         {busy ? (
-          ICONS.loading !== undefined ? (
-            <ICONS.loading size={16} className="__tt_spin" />
-          ) : (
-            <span className="__tt_spin">⟳</span>
-          )
+          <ICONS.loading size={16} />
         ) : (
           <TemporaryTaskMark size={16} />
         )}
@@ -719,7 +798,7 @@ function TemptaskRow(props: RowProps): React.ReactElement {
             aria-label={runtime.t('cleanup')}
             onClick={openClean}
           >
-            {ICONS.trash !== undefined ? <ICONS.trash size={16} /> : '🧹'}
+            <ICONS.trash size={16} />
           </button>
           {rootAction(props.canOpenPath ?? canOpen) === 'open' ? (
             <button
@@ -729,7 +808,7 @@ function TemptaskRow(props: RowProps): React.ReactElement {
               aria-label={runtime.t('openRoot')}
               onClick={(event) => void openRoot(event)}
             >
-              {ICONS.external !== undefined ? <ICONS.external size={16} /> : '📂'}
+              <ICONS.external size={16} />
             </button>
           ) : (
             <button
@@ -739,13 +818,7 @@ function TemptaskRow(props: RowProps): React.ReactElement {
               aria-label={runtime.t('copyRoot')}
               onClick={(event) => void copyRoot(event)}
             >
-              {copied
-                ? ICONS.check !== undefined
-                  ? <ICONS.check size={16} />
-                  : '✓'
-                : ICONS.copy !== undefined
-                  ? <ICONS.copy size={16} />
-                  : '⧉'}
+              {copied ? <ICONS.check size={16} /> : <ICONS.copy size={16} />}
             </button>
           )}
           <button
@@ -755,7 +828,7 @@ function TemptaskRow(props: RowProps): React.ReactElement {
             aria-label={runtime.t('help')}
             onClick={openHelp}
           >
-            {ICONS.question !== undefined ? <ICONS.question size={16} /> : '?'}
+            <ICONS.question size={16} />
           </button>
           <button
             type="button"
@@ -764,7 +837,7 @@ function TemptaskRow(props: RowProps): React.ReactElement {
             aria-label={runtime.t('settingsTitle')}
             onClick={openSettings}
           >
-            {ICONS.settings !== undefined ? <ICONS.settings size={16} /> : '⚙'}
+            <ICONS.settings size={16} />
           </button>
         </span>
       ) : null}
@@ -1232,7 +1305,7 @@ function CleanDialog(props: CleanDialogProps): React.ReactElement {
 /**
  * 常驻（注册在 shell.overlay，渲染 null）。
  *
- * 消费 host 的 pendingOpen：`/temptask new`、`/temptask open` 以及行上的「＋」都只是在 host 侧登记
+ * 消费 host 的 pendingOpen：`/temptask new`、`/temptask open` 以及行上主区的「新建」都只是在 host 侧登记
  * 一个请求，真正把会话切到前台必须由页面来做。会话刚创建时客户端可能还没收到会话列表更新，
  * 所以这里带重试（见 runtime.openSession）。
  */
@@ -1490,10 +1563,18 @@ const plugin: TemptaskClientPlugin = {
       return null;
     }
 
-    // 侧边栏那一行：位置在「新建会话」与工作区列表之间，官方负责行的外观与 tooltip。
+    /**
+     * 侧边栏那一行：官方负责行的外观与 tooltip，本行自己画内容（要"标签在左、按钮在右"）。
+     *
+     * `order` 为什么是负数：0.1.7-rc.2 起官方 Web 端自己往 `sidebar.panellist` 注册了一个
+     * 「插件」面板行（`id: "plugins"`、`order: 0`、图标是风车，见官方 `PluginsPanelIcon`）。
+     * 面板列表按 `order` **升序**渲染，取 10 时那行「插件」会永远压在本行上面，
+     * 本行就贴不到「新建会话」正下方；取负值才能排到它前面。
+     * 也不要用 0：并列名次只能靠 `Array.prototype.sort` 的稳定性决定先后，太脆。
+     */
     slots.inject('sidebar.panellist', () =>
       slots.register(
-        { name: 'sidebar.panellist', id: NS, order: 10, label: () => t('nav'), locale: NS },
+        { name: 'sidebar.panellist', id: NS, order: -100, label: () => t('nav'), locale: NS },
         (raw) => {
           const injected = raw as {
             size?: unknown;

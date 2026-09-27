@@ -12,6 +12,12 @@
  *   2. 把 `export default X` 变成 `var __plugin = X`，工厂末尾 `module.exports = __plugin`；
  *   3. 包上 ModuleLoader 头。
  *
+ * **`id` 必须等于 package.json 的 `name`**（不是目录名、也不是短名）。宿主
+ * `dsh-client-modules` 用加载器条目名（= 包名）当图行 id，`arrive()` 装载完 combo
+ * 脚本后按这个 id 查 `factories`；对不上就整批报
+ * `bundle … loaded without registering "<pkg>" via __ModuleLoader__.load`
+ * （连带同一批的其它插件一起失败）。所以这里从 package.json 现读，绝不写字面量。
+ *
  * 任何残留的 `import` / `export` 都会让构建**大声失败**，而不是产出一个加载不起来的包。
  */
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
@@ -22,7 +28,12 @@ const root = join(dirname(fileURLToPath(import.meta.url)), '..');
 const compiledFile = join(root, 'build', 'client', 'client.js');
 const outFile = join(root, 'client', 'client.js');
 
-const PLUGIN_ID = 'dsh-temptask';
+// 注册 id 的唯一真相来源：包名。宿主就是按包名找工厂的（见文件头说明）。
+const packageJson = JSON.parse(await readFile(join(root, 'package.json'), 'utf8'));
+const PLUGIN_ID = packageJson.name;
+if (typeof PLUGIN_ID !== 'string' || PLUGIN_ID.length === 0) {
+  throw new Error('build-client: package.json 里没有可用的 name，无法确定 ModuleLoader 注册 id');
+}
 
 /** 把每一行都缩进一层（工厂体内）。 */
 function indent(text, pad) {
@@ -64,6 +75,11 @@ if (leftover.length > 0) {
 
 body = body.replace(/\n{3,}/gu, '\n\n').trim();
 
+/** 注册头：单独一段，既写进产物，也被下面的自检按字面量核对。 */
+const banner = `window.__ModuleLoader__.load({
+  id: ${JSON.stringify(PLUGIN_ID)},
+  factory: (require) => {`;
+
 const bundle = `/**
  * dsh-temptask — client half（构建产物，请勿直接编辑）。
  *
@@ -73,9 +89,7 @@ const bundle = `/**
  * 运行在 DSH Web 页面里，通过 ctx.slots / ctx.locale / ctx.sessions / ctx.layout
  * 与宿主通信，通过 fetch("/dsh-temptask/api/*") 与 host half 通信。
  */
-window.__ModuleLoader__.load({
-  id: ${JSON.stringify(PLUGIN_ID)},
-  factory: (require) => {
+${banner}
     var module = { exports: {} };
     var exports = module.exports;
     Object.defineProperty(exports, Symbol.toStringTag, { value: "Module" });
@@ -89,6 +103,13 @@ ${indent(body, '    ')}
 });
 `;
 
+// 自检：产出的包必须真的以包名注册——宿主按包名查工厂，写错了就是整批插件加载失败。
+if (!bundle.includes(banner)) {
+  throw new Error(
+    `build-client: 产出的包没有以 id: ${JSON.stringify(PLUGIN_ID)} 注册（宿主会报 loaded without registering）`,
+  );
+}
+
 await mkdir(dirname(outFile), { recursive: true });
 await writeFile(outFile, bundle, 'utf8');
-console.log(`build-client: wrote ${outFile} (${bundle.length} bytes)`);
+console.log(`build-client: wrote ${outFile} (${bundle.length} bytes, id=${PLUGIN_ID})`);

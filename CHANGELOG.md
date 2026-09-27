@@ -4,6 +4,49 @@
 
 发布渠道：npm [`@aeroscis/dsh-temptask`](https://www.npmjs.com/package/@aeroscis/dsh-temptask) · 源码 <https://github.com/Aeroscis/dsh-temptask>
 
+## [0.3.3] — 2026-09-27
+
+### 修复
+
+- **同一个插件在不同 DSH 宿主上图标不一致**：行内图标改为**全部自绘 SVG**，不再
+  `require('@deepseek-ai/dsh-client-ui-primitives')`。该包的图标导出名在 `0.1.7-rc.2` 里从
+  `<Name>Outline<尺寸>`（`IconTrashOutline16`）改成了 `<Name>OutlineRegular|Medium`，
+  旧名字取不到时 0.3.2 会**静默降级**成 `🧹 📂 ? ⚙` 这类文本/emoji 字形——于是同一份插件在
+  `0.1.5-rc.2` 宿主（三方桌面 DSH Desktop 2.0.13）上是线框图标，在 `0.1.7-rc.2` 宿主
+  （官方 DeepSeek Harness 桌面版）上变成 emoji。自绘之后宿主怎么改名都不影响本插件，
+  字形规格对齐官方（`viewBox` 16、`currentColor`、1.4px 线宽），并带 `data-tt-icon` 记号便于排查。
+  清单里随之去掉 `dsh.client.inject`（该条目只用于「先加载哪个 client 包」的排序，本包已不再需要，
+  留着反而会在宿主移除该包时拖垮加载）；官方自己的插件文档同样要求不要 require 宿主 Client 包。
+- **那一行贴不到「新建会话」正下方**：`sidebar.panellist` 注册的 `order` 从 `10` 改为 `-100`。
+  `0.1.7-rc.2` 起官方 Web 端自己注册了一个「插件」面板行（`id: "plugins"`、`order: 0`、
+  图标 `IconPluginPinwheelOutlineRegular`），而面板列表按 `order` **升序**渲染——`order: 10` 时那行
+  「插件」永远压在本行上面（`0.1.5-rc.2` 宿主没有这行，所以只有官方端看起来"被挤开"）。
+  取负值即可排到它前面；不用 `0`，并列名次只能靠 `sort` 稳定性决定先后。
+
+### 测试
+
+- `scripts/smoke-client.mjs`（25 → **27 项**）：工厂的 require 桩收紧为**只允许 `react`**、
+  新增「`order` 必须为负」与「产物里不再出现宿主图标包 require」两条回归，
+  图标断言改认自绘记号（`data-tt-icon` / `data-tt-mark`），去掉「官方图标集缺席时退回文本字形」那条
+  （前提已不存在）；`scripts/check-pack.mjs` 同步改为断言清单里**没有** `dsh.client.inject`。
+
+## [0.3.2] — 2026-09-27
+
+> **npm 上没有这一版**：当时只把构建产物手工同步进了本机 profile，没有执行 `npm publish`
+> （registry 上从 `0.3.1` 直接到 `0.3.3`）。升级请直接用 `0.3.3`。
+
+### 修复
+
+- **客户端半边加载失败**：ModuleLoader 注册 id 从短名 `dsh-temptask` 改为**包名 `@aeroscis/dsh-temptask`**。
+  宿主 `dsh-client-modules` 用加载器条目名（= 包名）当模块图行 id，脚本装载后按这个 id 查工厂；
+  id 对不上时整批 combo 脚本一起失败，界面报
+  `bundle /plugins/… loaded without registering "@aeroscis/dsh-temptask" via __ModuleLoader__.load`
+  （`0.3.0` / `0.3.1` 均受影响，插件在这一版之前根本无法挂载 UI）。
+- 注册 id 不再手写：`scripts/build-client.mjs` 从 `package.json` 的 `name` 现读，构建后自检产物头部；
+  `scripts/smoke-client.mjs` 的断言也改为与包名比对（回归用例：产物里必须恰好注册一次、且 id 等于包名，
+  同时不得再出现短名）。短名仍然保留在设置命名空间与数据目录上（`NS` / `<DSH_HOME>/dsh-temptask`），
+  它们与模块 id 无关，升级后既有任务目录与配置**不受影响**。
+
 ## [0.3.1] — 2026-09-27
 
 ### 兼容性

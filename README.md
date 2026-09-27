@@ -43,12 +43,13 @@ dsh plugin --profile <profile> add /path/to/dsh-temptask
   或读对 `@deepseek-ai/dsh-*` 核心包的 `peerDependencies`（`@deepseek-ai/schemastery` 另有版本线，
   不参与 DSH 版本判定）。**它判的是"范围是否满足"，不是"版本是否相等"**——插件的版本号是它自己的迭代序号，
   与 DSH 版本无关。
-- **开发与验证环境**：DSH 运行时核心包 `0.1.5-rc.2`（桌面 App 自身显示 2.0.13，属另一条版本线）；
-  Windows 与 Linux（GitHub Actions）各跑一遍全部检查。
+- **开发与验证环境**：DSH 运行时核心包 `0.1.5-rc.2`（三方桌面 App DSH Desktop 2.0.13 内置的那条线）
+  与 `0.1.7-rc.2`（官方 DeepSeek Harness 桌面版内置的那条线）都已实测；两条线的界面差异由本插件自行吸收
+  （图标自绘、`order` 取负值），Windows 与 Linux（GitHub Actions）各跑一遍全部检查。
 - **依赖的宿主能力**（缺失时逐项降级，**任何一种缺失都不会让插件加载失败**）：
   `sessionController`（`create` / `cancel` / `openWorkspacePath`）、`workspaceRegistry`、`commands`、
-  `webServer`、`settings`，以及插槽 `sidebar.panellist` / `main` / `shell.overlay` / `settings.section`
-  与界面侧的 `@deepseek-ai/dsh-client-ui-primitives`。这些服务全部按可选读取。
+  `webServer`、`settings`，以及插槽 `sidebar.panellist` / `main` / `shell.overlay` / `settings.section`。
+  这些服务全部按可选读取。**界面侧不依赖任何宿主 Client 包**（行内图标自绘，见 §3）。
 - **怎么自查**：`?` 气泡底部显示本插件的两半版本（`插件后端 v…　·　插件界面 v…`）——
   这两个数是**插件自己的**，不要拿去和 DSH 版本比较；DSH 自身版本在 DSH 的关于页或市场里看。
 
@@ -79,7 +80,7 @@ dsh-temptask/
 │   └── dsh.d.ts            # DSH 接口的最小环境声明（见 §8）
 ├── lib/                    # 构建产物：host 运行时（ESM，DSH 加载的就是它）
 ├── client/client.js        # 构建产物：client 的 ModuleLoader 包
-├── scripts/                # build-client / prepare / smoke / smoke-client
+├── scripts/                # build-client / prepare / check-pack / check-registration / smoke / smoke-client
 ├── README.md
 └── LICENSE
 ```
@@ -89,9 +90,9 @@ dsh-temptask/
 | 位置 | 谁提供 | 内容 |
 | --- | --- | --- |
 | 侧边栏任务节点 + 展开后的会话 | **DSH 官方 WorkspaceBrowser** | 展开/收起、归档、重命名、搜索、拖拽排序、删除——本插件一行 UI 都不写 |
-| 侧边栏**那一行**（`sidebar.panellist`） | 本插件 | 位置在「新建会话」按钮与工作区列表之间，一个 **`.5px border-l3 + button-elevated-fill + r12`** 的框（取值抄自官方 `.newSession`）：左边是**主区「标记 + 临时任务」，整块可点 = 新建**（`role="button"` + Enter/Space，hover 用 `button-floating-hover`）；中间 1px 分隔线；右边四个 28×28 次要图标（清理 / 打开或复制 / 说明 / 设置），**清理 hover 转危险色**。主区图标是**自绘**的「临时任务」标记（文件夹轮廓 + 右下角时钟徽标），四个次要图标复用官方图标集（`IconTrashOutline16`、`IconRightUpOutline16` / `IconCopyOutline16`、`IconQuestionOutline14`、`IconSettingsOutline16`），创建中显示官方 loading 图标 + 旋转动画。**点主区不出任何页面**；窄栏时官方把行收成 36×36，只剩那个标记 |
+| 侧边栏**那一行**（`sidebar.panellist`） | 本插件 | **紧贴「新建会话」下方**（注册 `order` 取负值，排在官方「插件」面板行 `order: 0` 之前），一个 **`.5px border-l3 + button-elevated-fill + r12`** 的框（取值抄自官方 `.newSession`）：左边是**主区「标记 + 临时任务」，整块可点 = 新建**（`role="button"` + Enter/Space，hover 用 `button-floating-hover`）；中间 1px 分隔线；右边四个 28×28 次要图标（清理 / 打开或复制 / 说明 / 设置），**清理 hover 转危险色**。行内**所有**字形都是本插件**自绘的 SVG**（「临时任务」标记 = 文件夹轮廓 + 右下角时钟徽标；四个动作 = 垃圾桶 / 右上箭头 / 纸张 / 问号 / 齿轮，创建中是缺口圆环 + 旋转）。**点主区不出任何页面**；窄栏时官方把行收成 36×36，只剩那个标记 |
 | 齿轮 → 精简设置（浮层） | 本插件 | 只放一个策略：**删除任务时如何处理它的会话** —— `归档会话（推荐）` / `留在未分组`。写入走 `settingsScope`（有 settings 服务时）或 `/api/config`（降级），与设置卡片同一个命名空间 |
-| 说明气泡 / 清理确认框（`shell.overlay`） | 本插件 | `?` = 锚在该行下方的小气泡（任务数量 / 根目录 / 配置来源 / 记录文件 / **版本（插件后端 + 插件界面）** / 会话在哪 / 与 dsh-side-session 的区别 / 更多设置入口）。版本那一行会说清两半的区别：**插件后端**（Node 侧，只在 DSH 启动时加载 → 改插件要重启 DSH）与**插件界面**（按页面加载 → 刷新页面即更新）；两半不一致时会直接提示"重启 DSH"。它是**悬浮详情**：鼠标在气泡上就不动，离开约 0.6s 后自动收起——**没有手动关闭按钮**（再点一次 `?` 也会收起）；`🧹` = 居中确认框（勾选列表 + 二次确认）；`⚙` = 操作面板（**不会**自动收起）；另有创建失败时的小提示。都渲染在浮层里——不会被侧边栏裁掉，也不会嵌套进官方那个 `<button>` |
+| 说明气泡 / 清理确认框（`shell.overlay`） | 本插件 | `?` = 锚在该行下方的小气泡（任务数量 / 根目录 / 配置来源 / 记录文件 / **版本（插件后端 + 插件界面）** / 会话在哪 / 与 dsh-side-session 的区别 / 更多设置入口）。版本那一行会说清两半的区别：**插件后端**（Node 侧，只在 DSH 启动时加载 → 改插件要重启 DSH）与**插件界面**（按页面加载 → 刷新页面即更新）；两半不一致时会直接提示"重启 DSH"。它是**悬浮详情**：鼠标在气泡上就不动，离开约 0.6s 后自动收起——**没有手动关闭按钮**（再点一次 `?` 也会收起）；**垃圾桶** = 居中确认框（勾选列表 + 二次确认）；**齿轮** = 操作面板（**不会**自动收起）；另有创建失败时的小提示。都渲染在浮层里——不会被侧边栏裁掉，也不会嵌套进官方那个 `<button>` |
 | 兜底空面板（`main`，key=`dsh-temptask`） | 本插件 | **渲染 null 并立刻切回 conversation**。那一行在官方源码里是导航按钮（`onClick: selectPanel(id)`，键盘 Enter/Space 也只走它）——有这个兜底，误触只会闪一下，绝不会出现空白页或新页面 |
 | 清理对话框 | 本插件 | 任务勾选列表（默认勾选已关闭的）、全选/全不选、二次确认 |
 | 设置 → 插件 → 临时任务 | 本插件（`settings.section`） | 根目录、自动清理天数、**删除策略**、配置来源、清理入口、与 dsh-side-session 的区别 |
@@ -102,15 +103,19 @@ DSH 的树按「工作区归属」分组，而会话归到某个工作区当且�
 （见 §8 证据），所以把任务目录本身做成工作区，就能白拿官方的整棵树；本插件只在那行里放四个动作，
 **不替换任何官方 Slot、不新增任何导航目的地**。
 
-行内图标复用官方 primitives（`@deepseek-ai/dsh-client-ui-primitives`）——文本符号（`＋ ⧉ ?`）的笔画
-比官方图标细得多，塞进 28px 按钮里明显不搭。因此 `package.json` 声明了客户端依赖，让浏览器模块加载器
-把该包排在本包之前（`require` 时它一定已就绪）：
+行内图标**全部自绘**，不再 `require` 宿主图标包（`@deepseek-ai/dsh-client-ui-primitives`）。原因是那个包
+在 `0.1.7-rc.2` 里把图标导出名从 `<Name>Outline<尺寸>`（`IconTrashOutline16`）改成了
+`<Name>OutlineRegular|Medium`：老名字取不到时旧版代码会**静默降级**成 `🧹 📂 ? ⚙` 这类文本/emoji 字形，
+于是同一份插件在 `0.1.5` 宿主上是线框图标、在 `0.1.7` 宿主上变成 emoji（官方自己的插件文档也要求
+「不要 require 宿主 Client 包」）。自绘的代价只是观感要自己对齐官方规格：`viewBox` 16、
+`stroke="currentColor"`、1.4px 线宽。因此清单里也不再需要客户端依赖声明：
 
 ```json
-"dsh": { "client": { "inject": ["@deepseek-ai/dsh-client-ui-primitives"], "platform": "web" } }
+"dsh": { "client": { "platform": "web" } }
 ```
 
-取不到该包时（老宿主 / 图里没有这一行）自动退回文本字形（＋ / 🧹 / ⧉ / ?），UI 不会因此挂掉。
+任何时候都不会因为宿主少一个图标或改了图标名而变形、也不会因此挂掉（`data-tt-mark` / `data-tt-icon`
+是这些自绘字形的记号，可在开发者工具里直接认出是哪一枚）。
 
 已知边界（来自官方插槽的约束，不是疏忽）：那一行官方是按「导航按钮」渲染的，行内内容落在
 `aria-hidden` 的字形槽里——所以主区和四个小按钮对屏幕阅读器不可见（鼠标可用，每个都有 `title` 与
@@ -296,8 +301,9 @@ pnpm install
 pnpm typecheck     # host + client 两套 tsconfig，strict
 pnpm build         # src/ → lib/ + client/client.js
 pnpm check:pack    # 发布形态自检 6 项（入口/源码/脚本是否都被 files 覆盖）
-pnpm smoke         # 64 项端到端/渲染冒烟测试（40 host + 24 client，不需要 DSH 进程）
-pnpm check         # typecheck + build + check:pack + smoke
+pnpm smoke         # 65 项端到端/渲染冒烟测试（40 host + 25 client，不需要 DSH 进程）
+pnpm check:registration  # 用宿主真实的 dsh-client-modules 校验 ModuleLoader 注册契约（需要 DSH 桌面应用）
+pnpm check         # typecheck + build + check:pack + smoke + check:registration
 ```
 
 `check:pack` 也挂在 `prepack` 上，所以 `npm pack` / `npm publish` 之前会自动跑一遍：
@@ -318,23 +324,31 @@ pnpm check         # typecheck + build + check:pack + smoke
 **数据安全：在任务根目录里放未登记的目录/文件，`clean --all` 与 `autoCleanDays` 都不能碰它们**、
 两个 host 进程并发、服务全缺失时优雅降级。
 
-`scripts/smoke-client.mjs`（**24 项**）按 DSH 的方式装载 `client/client.js`
-（`window.__ModuleLoader__`），断言工厂只 `require("react")` + 官方图标集、注册了
-「那一行 + 兜底空面板 + 浮层×2 + 设置卡片」、**行的 `label` 是 i18n thunk：切换语言后再取必须
+`scripts/smoke-client.mjs`（**27 项**）按 DSH 的方式装载 `client/client.js`
+（`window.__ModuleLoader__`），断言工厂**只** `require("react")`（任何对宿主包的 require 都会让这条桩
+直接失败）、注册了「那一行 + 兜底空面板 + 浮层×2 + 设置卡片」、**面板行的 `order` 取负值**
+（排到官方「插件」面板行 `order: 0` 之前，紧贴「新建会话」）、**行的 `label` 是 i18n thunk：切换语言后再取必须
 得到另一种语言**（官方 `PanelRow` 每次投影都会重读它）、宽栏那行自己的标签文字只出现一次、
-**五个**小按钮且用的都是官方图标（断言出现 `IconNewChatOutline16` / `IconSettingsOutline16` 等，
-且不再出现细笔画文本加号）、构建产物里带着限定作用域的隐藏规则、`package.json` 声明了客户端依赖
-（保证图标集先于本包到达）、**官方图标集缺席时退回文本字形不崩**、窄栏只留图标、
+**五个**自绘字形（断言 `data-tt-icon` / `data-tt-mark`，且产物里不再出现宿主图标包的 require、
+不再出现 emoji 兜底字形、没有外链资源）、构建产物里带着限定作用域的隐藏规则、窄栏只留图标、
 **第三号按钮按宿主能力在"打开根目录 / 复制根目录"之间切换**（含能力未知时按复制渲染）、
 **兜底面板渲染 null（点那一行不会出现任何页面）**、浮层各态渲染正确
 （help / notice / clean / **齿轮设置的两档策略与选中态**）、
 **清理确认框按策略如实描述并标出「运行中」**、`settingsScope` 与 `locale` 缺失时各自降级，
 并把各组件真渲染一遍（`react-dom/server`）。
 
+`scripts/check-registration.mjs`（**3 项**）补上前面那些桩测不到的一环：它加载**宿主真实的**
+`@deepseek-ai/dsh-client-modules`（从 DSH 桌面应用的 `resources/app/node_modules` 找），
+按浏览器的顺序装好 `window.__ModuleLoader__` 队列门面，然后走一遍宿主那条判据
+（`loadBundle(url)` → `factories.has(row.id)`）。这条判据要求 **ModuleLoader 的注册 id 必须等于包名**
+（`row.id` 就是加载器条目名），所以注册 id 由 `scripts/build-client.mjs` 从 `package.json` 的 `name` 现读，
+不再手写。本机没有 DSH 时该项自动跳过（打印原因并以 0 退出），不影响 `npm run check`。
+
 ## 10. 排错
 
 | 现象 | 处理 |
 | --- | --- |
+| 界面弹「部分插件加载失败 / Failed to load plugins」，文案里有 `loaded without registering "@aeroscis/dsh-temptask"` | **已在 0.3.2 修复**（0.3.0 / 0.3.1 的客户端注册 id 写成了短名）。升级到 ≥0.3.2 后重启 DSH 即可；`pnpm check:registration` 能在发版前拦住这类不匹配 |
 | 侧边栏没有「临时任务」这一行 | 确认 profile 名对不对、插件是否装上；看 DSH 日志里有没有 `[dsh-temptask]`；窄栏（折叠）时它只剩图标，悬停有提示 |
 | 改了插件代码，行为却还是旧的 | **插件后端（Node 侧）只在 DSH 启动时加载**——必须重启 DSH；插件界面（页面）刷新即更新。点 `?` 看「版本」那一行：`插件后端 v…　·　插件界面 v…`，两半不一致时会直接提示「重启 DSH」。启动日志里也有 `[dsh-temptask] v<版本> 已就绪…`。三处版本号都应与 `package.json` 一致 |
 | 点了「新建」但没看到节点 | 节点是工作区，刷新/展开侧边栏；设置卡片里若提示「未提供 workspaceRegistry」，说明该宿主无法建节点（任务目录仍会创建） |

@@ -76,7 +76,12 @@ check('发布物包含源码与构建脚本（别人要能复核、能重建）'
 check('插件清单（dsh 字段）完整：bundle patch + client platform', () => {
   assert.equal(pkg.dsh?.bundle?.patch, './cordis.patch.yml');
   assert.equal(pkg.dsh?.client?.platform, 'web');
-  assert.deepEqual(pkg.dsh?.client?.inject, ['@deepseek-ai/dsh-client-ui-primitives']);
+  assert.equal(
+    pkg.dsh?.client?.inject,
+    undefined,
+    '行内图标是自绘的，不再需要把宿主图标包排在本包之前；' +
+      'inject 只影响「先加载哪个 client 包」，留一个用不到的条目会在宿主改名/移除该包时拖垮加载',
+  );
 });
 
 check('cordis.patch.yml 真的插入本插件行', () => {
