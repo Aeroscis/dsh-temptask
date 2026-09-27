@@ -15,7 +15,7 @@
 
 ```powershell
 # 用你自己的 profile 名。本机（DSH Desktop）实际是 desktop。
-dsh plugin --profile desktop add dsh-temptask
+dsh plugin --profile desktop add @aeroscis/dsh-temptask
 
 # 从本地目录安装（还没发布到 registry 时）：
 dsh plugin --profile desktop add D:\Flora\ProgramProjects\dsh-temptask
@@ -31,7 +31,7 @@ dsh plugin --profile desktop add D:\Flora\ProgramProjects\dsh-temptask
    而**节点名始终保持那个时间戳目录名**——想换个名字就在节点上右键重命名（那是 DSH 自己的能力）；
 3. `⚙` 里选「删除任务时怎么处理它的会话」，`?` 里是这份说明。
 
-卸载：`dsh plugin --profile desktop remove dsh-temptask`。
+卸载：`dsh plugin --profile desktop remove @aeroscis/dsh-temptask`。
 任务目录与 `tasks.json` 不会被卸载流程删除，用菜单里的「清理临时任务」或手工删除。
 
 ## 2. 项目结构
@@ -139,7 +139,7 @@ DSH 的树按「工作区归属」分组，而会话归到某个工作区当且�
 ```yaml
 - insert:
     - id: dsh-temptask
-      name: 'dsh-temptask'
+      name: '@aeroscis/dsh-temptask'
       config:
         autoCleanDays: 7
 ```
@@ -352,7 +352,7 @@ client 测试全部是 `react-dom/server` 的**静态渲染**。也就是说：*
 - `package.json` 的 `repository` / `homepage` / `bugs` / `author` 仍为空——发布需要你自己填仓库地址；
 - **测一次真安装形态**：当前 profile 里是 `link:` 安装（指向本目录）。发布版是 tarball，
   建议 `npm pack` 后在一个**临时 profile**（`dsh --from-default-profile web` 起一个）里
-  `dsh plugin --profile <临时> add ./dsh-temptask-0.2.5.tgz` 启动验证；
+  `dsh plugin --profile <临时> add ./aeroscis-dsh-temptask-0.3.0.tgz` 启动验证；
 - **卸载**：`dsh plugin remove` 后 profile 仍能正常启动（语义是保留目录与 `tasks.json`）。
 
 ### 已知未做（不要宣传成支持）

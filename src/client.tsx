@@ -43,7 +43,7 @@ const API = '/dsh-temptask/api';
  * 纯客户端改动（比如这一版只调了 UI）host 版本号不变，气泡里并排显示两半，
  * 才能判断"到底是哪半边还是旧的"。
  */
-const CLIENT_VERSION = '0.2.7';
+const CLIENT_VERSION = '0.3.0';
 
 /**
  * `?` 气泡的"鼠标离开后自动收起"延迟（毫秒）。
