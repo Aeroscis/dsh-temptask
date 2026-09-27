@@ -366,10 +366,10 @@ check('浮层：关闭时不渲染；help 显示说明；notice 显示失败原�
   assert.ok(help.includes('更多设置'), help);
   assert.ok(help.includes('版本'), '说明气泡里应能看到版本，用来确认"跑的是哪一版"');
   assert.ok(
-    help.includes('主程序 v') && help.includes('界面 v'),
-    '版本要用「主程序 / 界面」这种能看懂的说法分开显示，而不是 host/client 术语',
+    help.includes('插件后端 v') && help.includes('插件界面 v'),
+    '版本要标明是「插件后端 / 插件界面」——不能让人误以为那是 DSH 的版本',
   );
-  assert.ok(help.includes('重启 DSH'), '要直接说清"主程序要重启才更新"');
+  assert.ok(help.includes('重启 DSH'), '要直接说清"插件后端要重启才更新"');
   assert.equal(
     (help.match(/<button/gu) ?? []).length,
     0,
@@ -531,12 +531,12 @@ check('悬浮详情自动收起的延迟是 450ms（600ms 偏慢）', () => {
   assert.equal(internals.TRAY_AUTO_CLOSE_MS, 450);
 });
 
-check('两半版本不一致能被判出来（说明"界面已更新但主程序还是旧的"）', () => {
+check('两半版本不一致能被判出来（说明"界面已更新但后端还是旧的"）', () => {
   const differ = internals.halvesDiffer;
   assert.equal(typeof differ, 'function', '缺少 halvesDiffer');
   assert.equal(differ('0.2.0', '0.2.3'), true, '一旧一新应判为不一致');
   assert.equal(differ('0.2.3', '0.2.3'), false, '一致时不提示');
-  assert.equal(differ(undefined, '0.2.3'), false, '拿不到主程序版本时不做任何断言');
+  assert.equal(differ(undefined, '0.2.3'), false, '拿不到后端版本时不做任何断言');
 });
 
 check('设置卡片渲染根目录 / 自动清理 / 与 dsh-side-session 的区别', () => {

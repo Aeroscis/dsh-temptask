@@ -44,7 +44,8 @@
     "url": "https://github.com/Aeroscis/dsh-temptask/issues"
   },
   "engines": {
-    "node": "^22.19.0 || >=24.0.0"
+    "node": "^22.19.0 || >=24.0.0",
+    "dsh": "^0.1.5-rc.2"
   },
   "scripts": {
     "build": "npm run build:host && npm run build:client",
@@ -71,8 +72,8 @@
     }
   },
   "peerDependencies": {
-    "@deepseek-ai/dsh-settings": "*",
-    "@deepseek-ai/schemastery": "*"
+    "@deepseek-ai/dsh-settings": "^0.1.5-rc.2",
+    "@deepseek-ai/schemastery": "^3.18.1"
   },
   "peerDependenciesMeta": {
     "@deepseek-ai/dsh-settings": {

@@ -141,9 +141,10 @@ const ZH: Record<string, string> = {
   configSource: '配置来源',
   dataFile: '记录文件',
   versionLabel: '版本',
-  hostLabel: '主程序',
-  clientLabel: '界面',
-  versionHint: '「主程序」只在 DSH 启动时加载（改了插件要重启 DSH）；「界面」刷新页面即更新。',
+  hostLabel: '插件后端',
+  clientLabel: '插件界面',
+  versionHint:
+    '「插件后端」只在 DSH 启动时加载（改了插件要重启 DSH）；「插件界面」刷新页面即更新。两者都是本插件的版本，与 DSH 自身版本无关。',
   versionMismatch: '⚠️ 两半版本不一致：有一半还是旧的——重启 DSH 可让两半同时更新。',
   settingsManaged: 'DSH 设置（设置 → 插件 → 临时任务）',
   fileManaged: '插件数据目录下的 config.json',
@@ -213,10 +214,10 @@ const EN: Record<string, string> = {
   configSource: 'Config source',
   dataFile: 'Record file',
   versionLabel: 'Version',
-  hostLabel: 'app',
+  hostLabel: 'backend',
   clientLabel: 'UI',
   versionHint:
-    'The app half loads only when DSH starts (restart DSH after changing the plugin); the UI half updates on page reload.',
+    'The backend half loads only when DSH starts (restart DSH after changing the plugin); the UI half updates on page reload. Both are this plugin\u2019s own versions, unrelated to the DSH version.',
   versionMismatch: '⚠️ Halves disagree — one of them is still the old build. Restarting DSH updates both.',
   settingsManaged: 'DSH settings (Settings → Plugins → Temporary tasks)',
   fileManaged: 'config.json in the plugin data directory',
@@ -386,10 +387,10 @@ function labelOf(task: TaskView): string {
 }
 
 /**
- * 主程序版本与界面版本是否不一致。
+ * 本插件的后端版本与界面版本是否不一致。
  *
- * 为什么值得单独一个函数：主程序（Node 侧）只在 DSH 启动时加载插件代码，而界面是按页面重新
- * 拉取客户端包的——所以两半确实可能一旧一新。拿不到主程序版本时不做任何断言（不猜）。
+ * 为什么值得单独一个函数：后端（Node 侧）只在 DSH 启动时加载插件代码，而界面是按页面重新
+ * 拉取客户端包的——所以两半确实可能一旧一新。拿不到后端版本时不做任何断言（不猜）。
  */
 function halvesDiffer(hostVersion: string | undefined, clientVersion: string): boolean {
   return hostVersion !== undefined && hostVersion !== clientVersion;
