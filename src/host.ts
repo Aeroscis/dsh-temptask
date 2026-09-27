@@ -35,7 +35,7 @@ import { TemptaskManager } from './tasks.js';
 import { ERROR_CODES, type ApiResult, type ConfigSource, type TemptaskConfig } from './types.js';
 
 export const name = 'dsh-temptask';
-export const version = '0.3.0';
+export const version = '0.3.1';
 
 /** 不声明硬依赖：所有服务都按可选处理（见文件头说明）。 */
 export const inject: string[] = [];

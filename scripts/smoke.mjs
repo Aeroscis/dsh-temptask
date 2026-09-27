@@ -150,7 +150,7 @@ function createStubContext(state) {
     async openWorkspacePath(request, signal) {
       if (state.noOpenPath === true) throw new Error('宿主未接管文件管理器');
       // 复刻真实实现：它第一行就是 `signal.throwIfAborted()`。
-      // 桩如果不校验这个，就抓不到"忘了传 signal"这类事故（真机实测撞过一次）。
+      // 桩如果不校验这个，就抓不到"忘了传 signal"这类事故。
       if (signal === undefined) {
         throw new Error("Cannot read properties of undefined (reading 'throwIfAborted')");
       }

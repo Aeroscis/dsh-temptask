@@ -43,11 +43,11 @@ const API = '/dsh-temptask/api';
  * 纯客户端改动（比如这一版只调了 UI）host 版本号不变，气泡里并排显示两半，
  * 才能判断"到底是哪半边还是旧的"。
  */
-const CLIENT_VERSION = '0.3.0';
+const CLIENT_VERSION = '0.3.1';
 
 /**
  * `?` 气泡的"鼠标离开后自动收起"延迟（毫秒）。
- * 取值依据：600ms 实测手感偏慢（用户反馈 -25%），450ms 既不会误收也够从容。
+ * 取值依据：450ms 是「不误收」与「不显得拖沓」之间的取值（600ms 偏慢）。
  */
 const TRAY_AUTO_CLOSE_MS = 450;
 
@@ -268,14 +268,14 @@ const EN: Record<string, string> = {
 const CSS = [
   // 侧边栏那一行：官方行是 flex + padding 7px 8px；这里让标签在左、按钮在右。
   '.__tt_row{display:flex;align-items:center;gap:8px;width:100%;min-width:0}',
-  // 宽栏这一行做成官方「新建会话」按钮的样子（用户反馈：原来和背景融为一体）。
+  // 宽栏这一行沿用官方「新建会话」按钮的规格（边框 + elevated 底色），避免与侧边栏背景混成一片。
   // 取值逐条抄自官方 .EXfQ3q_newSession：.5px border-l3 + button-elevated-fill + r12 + h38 + padding 8/16。
   '.__tt_rowWide{box-sizing:border-box;min-height:38px;padding:0;gap:0;margin:0 2px 8px;border:.5px solid var(--dsw-alias-border-l3);border-radius:12px;background:var(--dsw-alias-button-elevated-fill)}',
   '.__tt_rowWide:hover{background:var(--dsw-alias-button-floating-hover)}',
   // 官方 .panelRow 自带 padding 与 hover 背景，会把边框挤在里面并露出一圈"行背景"——
   // 所以只在含本行的那一行里清掉（:has 限定，不影响其它面板行）。
-  // 官方 .panelGlyph 是 flex:none —— 它只会缩到内容宽度，我的 width:100% 撑不开，
-  // 于是整行不随侧边栏宽度变化（实测反馈）。只在含本行的那一行里把它改成可伸展。
+  // 官方 .panelGlyph 默认 flex:none，只会缩到内容宽度，行内的 width:100% 撑不开，
+  // 于是整行不随侧边栏宽度变化。只在含本行的那一行里把它改成可伸展。
   '[class*="panelRow"]:has(.__tt_row) [class*="panelGlyph"]{flex:1 1 auto;min-width:0;justify-content:flex-start}',
   '[class*="panelRow"]:has(.__tt_row){padding:0;background:transparent;min-height:0}',
   '[class*="panelRow"]:has(.__tt_row):hover{background:transparent}',
@@ -526,7 +526,7 @@ function TemporaryTaskMark(props: { size?: number }): React.ReactElement {
   );
 }
 
-/* 四个动作按钮沿用确认过的字形（＋ / 🧹 / ⧉ / ?）：实测界面字体不缺字形，不需要换成 SVG。 */
+/* 四个动作按钮沿用界面字体自带字形（＋ / 🧹 / ⧉ / ?）：这些字形在任何语言下都存在，无需自绘 SVG。 */
 
 /* ─────────────────────────── 侧边栏那一行 ─────────────────────────── */
 

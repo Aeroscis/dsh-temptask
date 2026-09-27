@@ -527,7 +527,7 @@ check('第三号按钮：能打开文件夹就「打开根目录」，否则退�
   assert.ok(notOpenable.includes('data-official="IconCopyOutline16"'), notOpenable);
 });
 
-check('悬浮详情自动收起的延迟是 450ms（600ms 实测偏慢，用户反馈 -25%）', () => {
+check('悬浮详情自动收起的延迟是 450ms（600ms 偏慢）', () => {
   assert.equal(internals.TRAY_AUTO_CLOSE_MS, 450);
 });
 

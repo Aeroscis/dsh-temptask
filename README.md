@@ -14,11 +14,14 @@
 ## 1. 安装
 
 ```powershell
-# 用你自己的 profile 名。本机（DSH Desktop）实际是 desktop。
-dsh plugin --profile desktop add @aeroscis/dsh-temptask
+# 默认 profile
+dsh plugin add @aeroscis/dsh-temptask
 
-# 从本地目录安装（还没发布到 registry 时）：
-dsh plugin --profile desktop add D:\Flora\ProgramProjects\dsh-temptask
+# 指定 profile
+dsh plugin --profile <profile> add @aeroscis/dsh-temptask
+
+# 从本地源码目录安装（尚未发布到 registry 时）
+dsh plugin --profile <profile> add /path/to/dsh-temptask
 ```
 
 然后**重启 DSH**。重启后侧边栏顶部（「新建会话」按钮下方、工作区列表**上方**）多出一行
@@ -31,7 +34,7 @@ dsh plugin --profile desktop add D:\Flora\ProgramProjects\dsh-temptask
    而**节点名始终保持那个时间戳目录名**——想换个名字就在节点上右键重命名（那是 DSH 自己的能力）；
 3. `⚙` 里选「删除任务时怎么处理它的会话」，`?` 里是这份说明。
 
-卸载：`dsh plugin --profile desktop remove @aeroscis/dsh-temptask`。
+卸载：`dsh plugin --profile <profile> remove @aeroscis/dsh-temptask`。
 任务目录与 `tasks.json` 不会被卸载流程删除，用菜单里的「清理临时任务」或手工删除。
 
 ## 2. 项目结构
@@ -195,7 +198,7 @@ session-query 的内存缓存与 `session_projcache` 的 sqlite，属于碰私�
 
 ### 并发：同一个 DSH_HOME 下多个 profile 同时运行
 
-`tasks.json`、配置、`rootDir` 都在 DSH_HOME 级，所以 `desktop` 与 `dsh web` 同时跑时**共用一份记录**。
+`tasks.json`、配置、`rootDir` 都在 DSH_HOME 级，所以**多个 profile 同时运行**（例如桌面版与 `dsh web`）时共用一份记录。
 两个进程同时写时的处理：
 
 - **写入前在锁内重读磁盘**，以磁盘内容为基准做变更（按 id 增删改），不拿本进程的内存副本整份覆盖；
@@ -242,19 +245,19 @@ session-query 的内存缓存与 `session_projcache` 的 sqlite，属于碰私�
 - 所有副作用都挂在 Cordis fiber 上（`ctx.effect` / 注入子上下文），插件停用或替换时自动回收
 - 所有服务都按**可选**读取（`ctx.get` + 缺失即降级），任一服务缺失都不会让插件加载失败
 
-## 8. 与最初需求书的差异（以及为什么）
+## 8. 设计取舍（以及为什么）
 
-需求书里的 API 名字有一部分在真实 DSH 里不存在；更重要的是，**第 1 条与第 2 条需求在 DSH 的
-数据模型下互相冲突**。本插件按「能真正在侧边栏长成树」的形状实现，逐条说明：
+早期设计里假定的部分 API 在真实 DSH 中并不存在；另外有两条设计目标在 DSH 的数据模型下互相冲突。
+本插件按「能真正在侧边栏长成树」的形状实现，逐条说明：
 
-| 需求书写法 | 实际实现 | 说明 |
+| 早期设计 | 实际实现 | 说明 |
 | --- | --- | --- |
 | `session.create({ cwd })` | `ctx.sessionController.create({ cwd })` | DSH 没有公开的 `session` 服务；`sessionController` 就是 `ctx.remote.session` 的 host 实现，其 `create` 明确接受「只给 `cwd`」。降级：`ctx.agents.create({ sessionId, meta: { cwd } })` |
 | `session.created` / `closed` / `focused` | `session/created` / `session/disposed` / `session/event` 的 `user/message` | 真实事件名用斜杠；没有 focused 事件，用户发消息等价于「正在用这个任务」 |
-| **不绑定任何长期工作空间 / 不进入项目列表** | **任务 = 一个临时工作区**，会出现在侧边栏的工作区列表里 | 这条与原需求相反，是**为了满足你的第 2 点**：DSH 的树按工作区归属分组，而 `WorkspaceEntity.attachSession` 会抛 `cannot attach session '…': its cwd resolves to '…'`，且工作区的 `sessionIds` 按 `sessionPath(id) === path` 过滤——即**会话归到某工作区当且仅当 `session.cwd === workspace.path`**。所以「一个叫『任务』的容器 + 每个子会话各带自己的临时目录」在 DSH 里**无法表达**；把任务目录本身做成工作区，才能白拿「任务节点 → 子会话」这棵树与全套原生操作。代价：任务节点与真实项目并列（但都在 `<DSH_HOME>/dsh-temptask` 下，可整体清理） |
+| 任务不进工作区列表 | **任务 = 一个临时工作区**，会出现在侧边栏的工作区列表里（都在 `<DSH_HOME>/dsh-temptask` 下，可整体清理） | DSH 的树按工作区归属分组：`WorkspaceEntity.attachSession` 要求会话 cwd 与工作区路径一致（否则抛 `cannot attach session '…': its cwd resolves to '…'`），且工作区的 `sessionIds` 按 `sessionPath(id) === path` 过滤——即**会话归到某工作区当且仅当 `session.cwd === workspace.path`**。所以「一个叫『任务』的容器 + 每个子会话各带自己的临时目录」在 DSH 里**无法表达**；把任务目录本身做成工作区，才能直接获得「任务节点 → 子会话」这棵树与全套原生操作 |
 | 侧边栏新增「任务」分组，与项目同级 | 任务以**工作区节点**的形态出现在官方树里 + 侧边栏一行「临时任务」标签与 ＋/🧹/⧉/? 四个小按钮（位置在「新建会话」与工作区列表之间） | 侧边栏**没有**给「同级第二个浏览分组」留增量插槽：`sidebar.workspaces` 是 `single` 且标记 `shadows-shipped-ui`，占用它会遮蔽官方工作区浏览器，并让它的子插槽 `sidebar.workspaces.directoryFlow` 失效——该洞由官方 `WorkspacePickFlow` 在「添加工作区」流程里渲染（`flowAvailable = useDirectoryFlow(occupied => occupied)`），占了它反而会弄坏官方的按目录添加工作区；而官方浏览器组件只导出 `apply`/`inject`，无法复用。那一行的点击语义是 `selectPanel(id)`（键盘激活同样只走它），所以本插件同时注册同名 `main` 面板作为**空兜底**（渲染 null + 立刻回会话），保证不出现任何页面 |
-| 任务名称（输入框、`nameTemplate`、重命名显示名） | **整条删除** | 工作区标题默认取目录 basename，DSH 只在显式 `rename` 时才改它 —— 会话标题属于**会话行**，不属于节点。所以本插件**不碰**工作区标题（早期版本曾把 DSH 总结的会话标题写回节点，结果每轮对话都可能给节点改名、还会覆盖用户手动改的名字，已删除，并留了一条回归用例）。要改名就在节点上右键重命名（官方能力） |
-| 任务根目录 `D:\dsh_working` / `~/.dsh/tasks` | `<DSH_HOME>/dsh-temptask` | 按你的要求改成 DSH 自己的目录，目录名 = 时间戳 |
+| 任务名称（输入框、`nameTemplate`、重命名显示名） | **整条删除** | 工作区标题默认取目录 basename，DSH 只在显式 `rename` 时才改它 —— 会话标题属于**会话行**，不属于节点。所以本插件**不碰**工作区标题（早期版本曾把 DSH 总结的会话标题写回节点，结果每轮对话都可能给节点改名、还会覆盖手工改的名字，已删除，并留了一条回归用例）。要改名就在节点上右键重命名（官方能力） |
+| 任务根目录放在用户自选路径 | `<DSH_HOME>/dsh-temptask` | 放在 DSH 自己的目录下，不掺进用户的工作目录；目录名 = 时间戳，一个任务一个目录，天然不重名、可排序 |
 | 命令解析支持参数带空格 | `/temptask open "2026-09-27"` | 支持单/双引号包裹（目录名是时间戳） |
 | 右键菜单里的「复制任务路径」 | 那一行改为 **打开任务根目录**（官方 `sessionController.openWorkspacePath`，它接受任意路径）；宿主不能打开文件夹时自动退回"复制"。**复制始终留在齿轮里**（次要动作不跟主按钮抢位置） | 「打开」是目的地动作，「复制」是它的权宜替代——但粘进终端/编辑器仍有用，所以两者都留，只是分层：能用就用打开，不能用才复制 |
 | 删除的二次确认 | UI 弹确认对话框 + 命令必须 `--yes` + 服务端强制 `confirm: true` | 三层都拦，绕过 UI 也删不掉 |
@@ -328,11 +331,10 @@ pnpm check         # typecheck + build + check:pack + smoke
 
 ## 11. 发布前检查清单
 
-**自动化覆盖到哪、没覆盖到哪（先说清楚）**：host 测试全部跑在**桩 Cordis 上下文**上，
-client 测试全部是 `react-dom/server` 的**静态渲染**。也就是说：**业务逻辑可信，
-"放进真实 DSH 里会怎样"必须手工验一遍**。
+**自动化覆盖边界**：host 测试全部跑在**桩 Cordis 上下文**上，client 测试全部是 `react-dom/server` 的
+**静态渲染**。也就是说：业务逻辑与各条降级路径已覆盖，**真实 DSH 与真实 DOM 下的表现需要人工验收一遍**。
 
-### 必须手工验（按出错后果排序）
+### 需要人工验收（按出错后果排序）
 
 1. **数据安全（唯一"一错就丢数据"的地方）**：在 `~/.dsh/dsh-temptask/` 里手动放一个**没被登记**的
    目录 + 文件，再跑 `/temptask clean --all --yes`，并让 `autoCleanDays` 清一次 → 那个目录必须毫发无损。
@@ -347,19 +349,20 @@ client 测试全部是 `react-dom/server` 的**静态渲染**。也就是说：*
 7. **`?` 悬浮收起**：鼠标进出气泡；以及"点完 `?` 不碰它、直接移开鼠标"也要关。
 8. **窄栏**：侧边栏折叠后只剩 ＋，点它应能新建。
 
-### 需要你补的（我无法代填/无法在源码目录验证）
+### 发布前需要人工确认
 
-- `package.json` 的 `repository` / `homepage` / `bugs` / `author` 仍为空——发布需要你自己填仓库地址；
-- **测一次真安装形态**：当前 profile 里是 `link:` 安装（指向本目录）。发布版是 tarball，
-  建议 `npm pack` 后在一个**临时 profile**（`dsh --from-default-profile web` 起一个）里
-  `dsh plugin --profile <临时> add ./aeroscis-dsh-temptask-0.3.0.tgz` 启动验证；
-- **卸载**：`dsh plugin remove` 后 profile 仍能正常启动（语义是保留目录与 `tasks.json`）。
+- `package.json` 的 `repository` / `homepage` / `bugs` / `author` 与仓库一致；
+- **真安装形态**：开发时用 `link:` 安装即可，发布形态是 tarball —— 建议 `npm pack` 后在**临时 profile** 里
+  `dsh plugin --profile <profile> add ./aeroscis-dsh-temptask-<版本>.tgz` 启动验证一次；
+- **卸载**：`dsh plugin --profile <profile> remove @aeroscis/dsh-temptask` 之后 profile 仍能正常启动
+  （语义是保留任务目录与 `tasks.json`）。
 
-### 已知未做（不要宣传成支持）
+### 已知限制
 
-- 会话**无法真删**，只能归档（DSH 没有删除 API，见 §6）；
-- 跨进程并发只保证"写前重读 + 按 id 合并"，仍有亚毫秒级残留窗口（自动化是同进程双实例模拟）；
-- a11y 边界：那一行内部控件在官方的 `aria-hidden` 字形槽里，屏幕阅读器读不到（有键盘替代路径）。
+- **不支持真正删除会话**：只能归档（DSH 未提供删除 API，见 §6）；
+- **跨进程并发**只保证「写前重读 + 按 id 合并」，仍存在亚毫秒级残留窗口（自动化用例是同进程双实例模拟）；
+- **无障碍**：那一行内部控件位于官方 `aria-hidden` 字形槽内，屏幕阅读器无法读取；
+  等价动作在「设置 → 插件 → 临时任务」与 `/temptask` 命令里都可键盘到达。
 
 ## 12. 兼容性说明：dsh-temptask vs dsh-side-session
 
