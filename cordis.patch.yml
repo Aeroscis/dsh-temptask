@@ -1,0 +1,18 @@
+# dsh-temptask — bundle patch：插入本插件的 host 插件行。
+#
+# 这是一个「补丁层」文件：`dsh plugin add` 把它所在的包登记进 profile 的 bundles，
+# DSH 启动时按 cordis.yml 的合并规则应用本文件，于是 dsh-temptask 被挂载。
+#
+# 可选：在行内直接给出初始配置（会被设置页的 `dsh-temptask` 命名空间覆盖）：
+#
+#   - insert:
+#       - id: dsh-temptask
+#         name: 'dsh-temptask'
+#         config:
+#           rootDir: ''          # 空 = 按平台默认（Windows: D:\dsh_working，其它: ~/.dsh/tasks）
+#           autoCleanDays: 0     # >0 = 启动时清理 N 天前已关闭的任务
+#           nameTemplate: 'task-{timestamp}'
+#
+- insert:
+    - id: dsh-temptask
+      name: 'dsh-temptask'

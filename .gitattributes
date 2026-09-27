@@ -1,0 +1,8 @@
+# 统一用 LF 存进仓库：Windows 上开发也不会让换行符变成 diff 噪音。
+* text=auto eol=lf
+
+# 二进制/打包产物不要做换行处理
+*.tgz binary
+*.png binary
+*.jpg binary
+*.ico binary

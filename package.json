@@ -1,0 +1,89 @@
+{
+  "name": "dsh-temptask",
+  "version": "0.2.7",
+  "description": "DSH 临时任务模式：为 DSH 增加「任务」分组——不绑定任何长期工作空间，自动在任务根目录下创建隔离的临时工作目录并开启会话，即开即用、用完即弃。Temporary task mode for DeepSeek Harness.",
+  "type": "module",
+  "main": "lib/index.js",
+  "exports": {
+    ".": "./lib/index.js",
+    "./client": "./client/client.js",
+    "./cordis.patch.yml": "./cordis.patch.yml",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "lib",
+    "client",
+    "src",
+    "scripts",
+    "cordis.patch.yml",
+    "tsconfig.json",
+    "tsconfig.client.json",
+    "README.md",
+    "LICENSE"
+  ],
+  "keywords": [
+    "dsh",
+    "dsh-plugin",
+    "deepseek-harness",
+    "temporary-workspace",
+    "scratch",
+    "sandbox",
+    "session"
+  ],
+  "license": "MIT",
+  "author": "Aeroscis",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Aeroscis/dsh-temptask.git"
+  },
+  "homepage": "https://github.com/Aeroscis/dsh-temptask#readme",
+  "bugs": {
+    "url": "https://github.com/Aeroscis/dsh-temptask/issues"
+  },
+  "engines": {
+    "node": "^22.19.0 || >=24.0.0"
+  },
+  "scripts": {
+    "build": "npm run build:host && npm run build:client",
+    "build:host": "tsc -p tsconfig.json",
+    "build:client": "tsc -p tsconfig.client.json && node scripts/build-client.mjs",
+    "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.client.json --noEmit",
+    "prepare": "node scripts/prepare.mjs",
+    "prepack": "node scripts/check-pack.mjs",
+    "check:pack": "node scripts/check-pack.mjs",
+    "smoke": "npm run smoke:host && npm run smoke:client",
+    "smoke:host": "node scripts/smoke.mjs",
+    "smoke:client": "node scripts/smoke-client.mjs",
+    "check": "npm run typecheck && npm run build && npm run check:pack && npm run smoke"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "inject": [
+        "@deepseek-ai/dsh-client-ui-primitives"
+      ],
+      "platform": "web"
+    }
+  },
+  "peerDependencies": {
+    "@deepseek-ai/dsh-settings": "*",
+    "@deepseek-ai/schemastery": "*"
+  },
+  "peerDependenciesMeta": {
+    "@deepseek-ai/dsh-settings": {
+      "optional": true
+    },
+    "@deepseek-ai/schemastery": {
+      "optional": true
+    }
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0",
+    "@types/react": "~18.3.1",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "typescript": "^7.0.2"
+  }
+}

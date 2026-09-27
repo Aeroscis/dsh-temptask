@@ -1,0 +1,24 @@
+name: check
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      # prepare 会在装依赖后自动构建（scripts/prepare.mjs：没有 typescript 就跳过）
+      - run: npm ci
+
+      # typecheck + build + 发布形态自检 + 70 项冒烟测试。
+      # 全部离线：不访问 registry、不访问 raw 域名，所以在任何网络环境下都稳。
+      - run: npm run check
