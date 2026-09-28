@@ -4,6 +4,68 @@
 
 发布渠道：npm [`@aeroscis/dsh-temptask`](https://www.npmjs.com/package/@aeroscis/dsh-temptask) · 源码 <https://github.com/Aeroscis/dsh-temptask>
 
+## [0.4.0] — 2026-09-28
+
+### 兼容性（**必须升级**：0.3.3 在 DSH 0.2.0-rc.1 上完全不加载）
+
+- **DSH 0.2.0-rc.1 上插件被整条跳过**：新宿主在挂载任何 bundle 之前先核对插件的
+  `@deepseek-ai/dsh*` peer 范围（`dsh-app-boot` 的 `evaluatePluginCompatibility`），
+  不满足就**整条 bundle 跳过**（日志 `skipping profile bundle "@aeroscis/dsh-temptask"`），
+  界面上「临时任务」那一行直接消失。0.3.3 声明的是 `@deepseek-ai/dsh-settings: ^0.1.5-rc.2`，
+  而 `^0.1.5-rc.2` 的上界是 `<0.2.0-0`，装不下 `0.2.0-rc.1`。
+  声明改为双范围 `^0.1.5-rc.2 || ^0.2.0-rc.1`（`engines.dsh`、`@deepseek-ai/dsh`、
+  `@deepseek-ai/dsh-settings` 三处一致），两条线都能过门。
+- **`@deepseek-ai/schemastery` 从"可选"变成"必需"**：本插件现在要导出 `Config`，
+  只能真拿到 schemastery 才建得出 schema（旧宿主附带的是 3.18.2）。运行时仍然用动态 import，
+  取不到时 `Config` 为 undefined、插件照常加载并退回配置文件通道。
+
+### 变更
+
+- **设置表单迁移到插件自己的 `Config` schema**：DSH 0.2.0-rc.1 删掉了
+  `settingsNamespace()` 与 `ctx.settings.register(namespace, schema)` 那套命名空间注册表，
+  改成「插件声明 Config，宿主按 volatile 字段投影表单」。于是：
+  - `lib/index.js` 导出 `Config`（`rootDir` / `autoCleanDays` / `onDeleteSessions` / `dataDir`
+    四个字段全部 `.volatile()`，带中文说明），官方「设置 → 插件 → 临时任务」表单据此渲染；
+  - `apply(ctx, config)` 读字段时兼容两种形态：0.2.0 是**活引用**（`config.rootDir.get()`），
+    0.1.x 是普通值；
+  - 配置写入优先走 `ctx.configEditor.edit(entry, …)`（官方的 profile 补丁，与设置表单同一处），
+    其次是 0.1.x 的 settings 命名空间，最后才是 `<dataDir>/config.json`；
+  - 监听 `loader/volatile-update`：官方表单改完配置后重新读引用，必要时重新载入清单
+    （改 `rootDir` 立即生效）；
+  - 配置来源新增 `plugin-config`（设置卡片与 `?` 气泡按来源给出对应的说明文字）。
+  - **旧宿主不受影响**：`ctx.settings.register` 仍然按可选探测，探测得到就照旧走命名空间。
+- **打开会话改用 `uiWorkspace.openSession`**：0.2.0-rc.1 的客户端 `ctx.sessions` 换成了
+  retain/binding/scope/fork 那套底层面，`sessions.open(id)` 已不存在；打开会话统一走
+  `ctx.uiWorkspace.openSession(target)`（它一次做完"选中会话 + 切到对话面板"）。
+  旧宿主上自动退回 `sessions.open` + `layout.selectPanel`。
+- **客户端配置通道改用 `configForms`**：0.2.0-rc.1 的 `ctx.configForms.get(entryId)` 取代了
+  `ctx.settingsScope.bind({ namespace })`（`entryId` 就是 profile 里那一行的 id，
+  本插件为 `dsh-temptask`）。设置卡片不再依赖任一通道存在——拿不到就走插件自己的 HTTP 接口，
+  因此**卡片在任何宿主上都会出现**（之前没有 `settingsScope` 就整块不注册）。
+- 版本号提升到 `0.4.0`（配置所有权换了一代，且旧版在新宿主上不可用）。
+
+### 测试
+
+- `scripts/smoke.mjs`（40 → **50 项**）：新增 0.2.0 配置模型的用例——行配置为 volatile 引用时
+  取值正确、来源标为 `plugin-config`、`/api/config` 走 `configEditor.edit`（断言不落
+  `config.json` 且未改动字段原样保留）、改完根目录立刻生效、`loader/volatile-update` 后重读引用、
+  没有 `configEditor` 时仍写 `config.json`，以及 `Config` schema 的 volatile 契约
+  （3.18.4 标 4 次、3.18.2 一次都不标）与包入口确实导出 `Config`。
+- `scripts/smoke-client.mjs`（27 → **34 项**）：新增「配置通道优先用 `configForms`、
+  没有时才 `bind` settingsScope」「`ConfigForm.set` 返回 false 必须抛错并回退 `/api/config`」
+  「`uiWorkspace.openSession` 优先、旧宿主退回 `sessions.open`」「配置来源标签」等用例；
+  原「缺 `settingsScope` 就少注册一个插槽」改为「五条插槽恒在」。
+- `scripts/check-registration.mjs`：适配两代 `makeRequire` 签名（0.1.x `(edges)` /
+  0.2.x `(ownerId, edges)`），并说明 0.2.x 的运行时在 `app.asar` 里、需要
+  `DSH_APP_ROOT=<解包目录>`；已在 **0.1.5-rc.2 与 0.2.0-rc.1 两份真实宿主实现**上各跑通一次。
+
+### 验证
+
+- 在一台真实的 DSH `0.2.0-rc.1` 宿主（官方桌面版随附的运行时）上装 0.4.0 实测：
+  插件正常挂载（不再被跳过）、`/state` 报 `configSource: plugin-config`、
+  `/create` `/delete` 全流程正常、`/api/config` 写入落进 profile 的 `cordis.patch.yml`
+  并当场生效（重启后仍在）、`--dump-config-schema` 里四个字段都带 `x-cordis.volatile: true`。
+
 ## [0.3.3] — 2026-09-27
 
 ### 修复

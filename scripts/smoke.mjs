@@ -17,7 +17,8 @@ import { mkdir, readFile, realpath, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { basename, join } from 'node:path';
 
-import plugin from '../lib/index.js';
+import plugin, * as entry from '../lib/index.js';
+import * as configModule from '../lib/config.js';
 
 const workspace = join(tmpdir(), `dsh-temptask-smoke-${Date.now()}`);
 const rootDir = join(workspace, 'root');
@@ -46,8 +47,31 @@ function newState(overrides = {}) {
     canceled: [],
     opened: [],
     titleCalls: [],
+    editorEdits: [],
+    editorApplied: [],
     ...overrides,
   };
+}
+
+/**
+ * 造一份 0.2.0 形态的行配置：每个字段都是 volatile 引用（`.get()` + 写符号）。
+ * `apply(ctx, config)` 收到的就是这个东西，而不是普通对象。
+ */
+function volatileRow(values) {
+  const refs = {};
+  for (const [key, value] of Object.entries(values)) {
+    let current = value;
+    refs[key] = {
+      get: () => current,
+      set: (next) => {
+        current = next;
+      },
+      [Symbol.for('cosmokit.volatile.write')]: (next) => {
+        current = next;
+      },
+    };
+  }
+  return refs;
 }
 
 /** 桩工作区注册表：语义对齐 DSH（realpath 归一化 + attachSession 校验 cwd）。 */
@@ -188,8 +212,31 @@ function createStubContext(state) {
     },
   };
 
+  /**
+   * 桩 configEditor（0.2.0-rc.1）。
+   *
+   * 真实现把配置写进 profile 的 cordis 补丁，再让 Loader 把值灌进插件的 volatile 引用。
+   * 桩直接把 change() 的结果写回 `state.rowRefs`——等价于「Loader 提交新值」那一步，
+   * 于是能验出「插件写配置 → 引用更新 → 根目录立刻生效」这条链路。
+   */
+  const configEditor =
+    state.withConfigEditor === true
+      ? {
+          async edit(entry, change) {
+            state.editorEdits.push(entry);
+            const current = {};
+            for (const [key, ref] of Object.entries(state.rowRefs ?? {})) current[key] = ref.get();
+            const next = change(current, {});
+            state.editorApplied.push(next);
+            for (const [key, value] of Object.entries(next ?? {})) state.rowRefs?.[key]?.set(value);
+          },
+        }
+      : undefined;
+
   const stub = {
     logger: { info: () => {}, warn: () => {}, error: () => {} },
+    /** 插件自己的 fiber（配置写入要用 `fiber.entry` 当身份）。 */
+    fiber: { entry: { id: 'dsh-temptask', options: { id: 'dsh-temptask', name: '@aeroscis/dsh-temptask' } } },
     get(name) {
       switch (name) {
         case 'sessionController':
@@ -200,6 +247,8 @@ function createStubContext(state) {
           return state.noWorkspaceRegistry === true ? undefined : workspaceRegistry;
         case 'sessionTitle':
           return sessionTitle;
+        case 'configEditor':
+          return configEditor;
         case 'connection':
         case 'settings':
           return undefined;
@@ -836,7 +885,130 @@ try {
     assert.ok(existsSync(join(bystanderSibling, 'notes.md')));
   });
 
+  /* ── 0.2.0-rc.1 的配置模型：volatile 引用 + configEditor ── */
+
+  const refRoot = join(workspace, 'ref-root');
+  const refNextRoot = join(workspace, 'ref-root-next');
+  const refData = join(workspace, 'ref-data');
+  const refState = newState({
+    withConfigEditor: true,
+    rowRefs: volatileRow({
+      rootDir: refRoot,
+      dataDir: refData,
+      autoCleanDays: 0,
+      onDeleteSessions: 'archive',
+    }),
+  });
+  const refHost = createStubContext(refState);
+  plugin.apply(refHost.ctx, refState.rowRefs);
+
+  const refInitial = await call(refHost.routes, `${API}/state`);
+  check('0.2.0：行配置是 volatile 引用时，apply 取到的是引用里的当前值', () => {
+    assert.equal(refInitial.ok, true);
+    assert.equal(refInitial.config.rootDir, refRoot, '引用要能读出根目录');
+    assert.equal(refInitial.config.dataDir, refData);
+    assert.equal(refInitial.config.onDeleteSessions, 'archive');
+  });
+
+  check('0.2.0：有 configEditor 时配置来源标为 plugin-config（官方「设置 → 插件」那一份）', () => {
+    assert.equal(refInitial.configSource, 'plugin-config');
+    assert.equal(refInitial.capabilities.settings, true, '有 configEditor 就是「宿主托管配置」');
+  });
+
+  const refWritten = await call(refHost.routes, `${API}/config`, 'POST', { rootDir: refNextRoot });
+  check('0.2.0：/api/config 写入走 configEditor.edit（写 profile 补丁，而不是 config.json）', () => {
+    assert.equal(refWritten.ok, true, JSON.stringify(refWritten));
+    assert.equal(refState.editorEdits.length, 1, '应当调用一次 configEditor.edit');
+    assert.equal(refState.editorEdits[0].options.id, 'dsh-temptask', 'edit 的 entry 必须是本插件那一行');
+    const applied = refState.editorApplied[0];
+    assert.equal(applied.rootDir, refNextRoot, 'change() 要给出完整的新行配置');
+    assert.equal(applied.dataDir, refData, '未改动的字段必须原样保留（不能整体覆盖成 patch）');
+    assert.equal(applied.onDeleteSessions, 'archive');
+    assert.equal(existsSync(join(refData, 'config.json')), false, '走 configEditor 时不该再落 config.json');
+  });
+
+  check('0.2.0：改完配置立刻换根目录（引用更新后重新载入清单）', () => {
+    // 上一项已把 rootDir 改成 refNextRoot；返回体里的 config 应当已是新值。
+    assert.equal(refWritten.config.rootDir, refNextRoot);
+  });
+
+  const refTask = await call(refHost.routes, `${API}/create`, 'POST', {});
+  check('0.2.0：新任务落在「改后的根目录」下（热更新真的生效）', () => {
+    assert.equal(refTask.ok, true, JSON.stringify(refTask));
+    assert.equal(refTask.task.path.startsWith(refNextRoot), true, refTask.task.path);
+  });
+
+  // Loader 在 volatile 值变化后往插件自己的 ctx 上发 loader/volatile-update
+  const refRootThird = join(workspace, 'ref-root-third');
+  refState.rowRefs.rootDir.set(refRootThird);
+  const volatileListener = refHost.listeners.get('loader/volatile-update');
+  check('0.2.0：已注册 loader/volatile-update 监听（官方表单改配置时靠它同步）', () => {
+    assert.equal(typeof volatileListener, 'function');
+  });
+  volatileListener();
+  await sleep(80);
+  const refTask2 = await call(refHost.routes, `${API}/create`, 'POST', {});
+  check('0.2.0：volatile-update 事件后重新读引用（根目录再次切换）', () => {
+    assert.equal(refTask2.ok, true, JSON.stringify(refTask2));
+    assert.equal(refTask2.task.path.startsWith(refRootThird), true, refTask2.task.path);
+  });
+
+  // 没有 configEditor 的宿主：仍写 config.json（旧行为不回退）
+  const fileData = join(workspace, 'file-data');
+  const fileState = newState();
+  const fileHost = createStubContext(fileState);
+  plugin.apply(fileHost.ctx, { rootDir, dataDir: fileData, autoCleanDays: 0 });
+  const fileWritten = await call(fileHost.routes, `${API}/config`, 'POST', { autoCleanDays: 5 });
+  const fileStateAfter = await call(fileHost.routes, `${API}/state`);
+  check('没有 configEditor 的宿主：/api/config 仍写 config.json（降级通道保留）', () => {
+    assert.equal(fileWritten.ok, true, JSON.stringify(fileWritten));
+    assert.equal(fileWritten.config.autoCleanDays, 5);
+    assert.equal(existsSync(join(fileData, 'config.json')), true);
+    assert.equal(fileStateAfter.configSource, 'config-file');
+  });
+
+  // 字段 schema：schemastery 3.18.4 才有 volatile()，3.18.2 上必须退化成普通字段
+  const fakeZ = (withVolatile) => {
+    const calls = { volatile: 0, description: 0, default: 0 };
+    const field = () => {
+      const api = {
+        default: () => {
+          calls.default += 1;
+          return api;
+        },
+        description: () => {
+          calls.description += 1;
+          return api;
+        },
+      };
+      if (withVolatile) {
+        api.volatile = () => {
+          calls.volatile += 1;
+          return api;
+        };
+      }
+      return api;
+    };
+    return { calls, z: { string: field, number: field, const: field, union: field, object: (shape) => ({ shape }) } };
+  };
+  const modern = fakeZ(true);
+  const legacy = fakeZ(false);
+  check('插件 Config：4 个字段；有 volatile() 就标热更新，没有（旧 schemastery）就不标', async () => {
+    const fields = configModule.buildPluginConfigFields(modern.z);
+    assert.deepEqual(Object.keys(fields), ['rootDir', 'autoCleanDays', 'onDeleteSessions', 'dataDir']);
+    assert.equal(modern.calls.volatile, 4, 'schemastery 3.18.4：四个字段都应标 volatile');
+    assert.equal(modern.calls.description, 4, '官方设置表单要显示说明文字');
+    const legacyFields = configModule.buildPluginConfigFields(legacy.z);
+    assert.deepEqual(Object.keys(legacyFields), ['rootDir', 'autoCleanDays', 'onDeleteSessions', 'dataDir']);
+    assert.equal(legacy.calls.volatile, 0, 'schemastery 3.18.2 没有 volatile()，不能调用它');
+  });
+
+  check('包入口导出 Config（加载器按这个字段渲染插件设置表单）', () => {
+    assert.equal(Object.hasOwn(entry, 'Config'), true, 'lib/index.js 必须再导出 Config');
+  });
+
   console.log(`\n✅ 全部 ${passed} 项通过`);
+
 } finally {
   await rm(workspace, { recursive: true, force: true }).catch(() => {});
 }

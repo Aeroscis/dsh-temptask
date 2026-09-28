@@ -61,8 +61,22 @@ export interface TemptaskConfig {
   onDeleteSessions: DeleteSessionPolicy;
 }
 
-/** 配置的实际来源，决定 UI 该把用户送去哪里改配置。 */
-export type ConfigSource = 'settings' | 'config-file' | 'cordis-row' | 'defaults';
+/**
+ * 配置的实际来源，决定 UI 该把用户送去哪里改配置。
+ *
+ *   - `plugin-config`：DSH 0.2.0-rc.1 起插件自己的 Config schema（官方「设置 → 插件」表单，
+ *      写进 profile 的 cordis 补丁）；
+ *   - `settings`：0.1.x 的 settings 命名空间；
+ *   - `config-file`：`<pluginDataDir>/config.json`；
+ *   - `cordis-row`：插件行的 `config:` 段（只读）；
+ *   - `defaults`：内置默认值。
+ */
+export type ConfigSource =
+  | 'plugin-config'
+  | 'settings'
+  | 'config-file'
+  | 'cordis-row'
+  | 'defaults';
 
 /** 由 host 端发起的「请打开这个会话」请求（供 /temptask new、/temptask open 使用）。 */
 export interface PendingOpen {
@@ -76,6 +90,7 @@ export interface PendingOpen {
 export interface TemptaskCapabilities {
   sessionController: boolean;
   agents: boolean;
+  /** 宿主是否托管本插件配置（0.1.x 的 settings 命名空间，或 0.2.0-rc.1 起的 configEditor）。 */
   settings: boolean;
   webServer: boolean;
   commands: boolean;

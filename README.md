@@ -39,17 +39,25 @@ dsh plugin --profile <profile> add /path/to/dsh-temptask
 
 ### 支持的 DSH 版本
 
-- **声明**：`package.json` 的 `engines.dsh` = `^0.1.5-rc.2`。市场的兼容性判定读的就是它，
-  或读对 `@deepseek-ai/dsh-*` 核心包的 `peerDependencies`（`@deepseek-ai/schemastery` 另有版本线，
-  不参与 DSH 版本判定）。**它判的是"范围是否满足"，不是"版本是否相等"**——插件的版本号是它自己的迭代序号，
-  与 DSH 版本无关。
-- **开发与验证环境**：DSH 运行时核心包 `0.1.5-rc.2`（三方桌面 App DSH Desktop 2.0.13 内置的那条线）
-  与 `0.1.7-rc.2`（官方 DeepSeek Harness 桌面版内置的那条线）都已实测；两条线的界面差异由本插件自行吸收
-  （图标自绘、`order` 取负值），Windows 与 Linux（GitHub Actions）各跑一遍全部检查。
+- **声明**：`engines.dsh` 与 `peerDependencies` 里的 `@deepseek-ai/dsh` 都是
+  `^0.1.5-rc.2 || ^0.2.0-rc.1`。市场的兼容性判定读的就是这些字段（`@deepseek-ai/schemastery`
+  另有版本线，不参与 DSH 版本判定），**它判的是"范围是否满足"，不是"版本是否相等"**——
+  插件的版本号是它自己的迭代序号，与 DSH 版本无关。
+- **硬门槛**：DSH 0.2.0-rc.1 起，宿主在挂载前会先核对插件的 `@deepseek-ai/dsh*` peer 范围，
+  不满足就**整条 bundle 直接跳过**（日志：`skipping profile bundle`，界面上那一行直接消失）。
+  本插件声明了双范围，两条线都能过这道门。
+- **开发与验证环境**（Windows 上实测，Linux 由 GitHub Actions 复跑全部检查）：
+  - `0.1.5-rc.2`（三方桌面 App DSH Desktop 2.0.13 内置的那条线）：settings 命名空间 + `sessions.open`；
+  - `0.1.7-rc.2`（官方 DeepSeek Harness 早期桌面版）：同上，界面差异由本插件自行吸收
+    （图标自绘、`order` 取负值）；
+  - `0.2.0-rc.1`（官方桌面版当前线，核心包与桌面版同号）：**插件自身的 Config schema +
+    `configEditor`** + `uiWorkspace.openSession`（新形态，见 §5）。
 - **依赖的宿主能力**（缺失时逐项降级，**任何一种缺失都不会让插件加载失败**）：
   `sessionController`（`create` / `cancel` / `openWorkspacePath`）、`workspaceRegistry`、`commands`、
-  `webServer`、`settings`，以及插槽 `sidebar.panellist` / `main` / `shell.overlay` / `settings.section`。
-  这些服务全部按可选读取。**界面侧不依赖任何宿主 Client 包**（行内图标自绘，见 §3）。
+  `webServer`；配置侧在 0.1.x 用 `settings` 命名空间、在 0.2.0-rc.1 起用 `configEditor`
+  （两者都没有时退回 `<dataDir>/config.json`）；客户端用 `configForms`（0.2.0-rc.1）或
+  `settingsScope`（0.1.x），插槽 `sidebar.panellist` / `main` / `shell.overlay` / `settings.section`
+  两条线同名。这些服务全部按可选读取。**界面侧不依赖任何宿主 Client 包**（行内图标自绘，见 §3）。
 - **怎么自查**：`?` 气泡底部显示本插件的两半版本（`插件后端 v…　·　插件界面 v…`）——
   这两个数是**插件自己的**，不要拿去和 DSH 版本比较；DSH 自身版本在 DSH 的关于页或市场里看。
 
@@ -91,7 +99,7 @@ dsh-temptask/
 | --- | --- | --- |
 | 侧边栏任务节点 + 展开后的会话 | **DSH 官方 WorkspaceBrowser** | 展开/收起、归档、重命名、搜索、拖拽排序、删除——本插件一行 UI 都不写 |
 | 侧边栏**那一行**（`sidebar.panellist`） | 本插件 | **紧贴「新建会话」下方**（注册 `order` 取负值，排在官方「插件」面板行 `order: 0` 之前），一个 **`.5px border-l3 + button-elevated-fill + r12`** 的框（取值抄自官方 `.newSession`）：左边是**主区「标记 + 临时任务」，整块可点 = 新建**（`role="button"` + Enter/Space，hover 用 `button-floating-hover`）；中间 1px 分隔线；右边四个 28×28 次要图标（清理 / 打开或复制 / 说明 / 设置），**清理 hover 转危险色**。行内**所有**字形都是本插件**自绘的 SVG**（「临时任务」标记 = 文件夹轮廓 + 右下角时钟徽标；四个动作 = 垃圾桶 / 右上箭头 / 纸张 / 问号 / 齿轮，创建中是缺口圆环 + 旋转）。**点主区不出任何页面**；窄栏时官方把行收成 36×36，只剩那个标记 |
-| 齿轮 → 精简设置（浮层） | 本插件 | 只放一个策略：**删除任务时如何处理它的会话** —— `归档会话（推荐）` / `留在未分组`。写入走 `settingsScope`（有 settings 服务时）或 `/api/config`（降级），与设置卡片同一个命名空间 |
+| 齿轮 → 精简设置（浮层） | 本插件 | 只放一个策略：**删除任务时如何处理它的会话** —— `归档会话（推荐）` / `留在未分组`。写入优先走客户端配置通道（`configForms`，0.2.0-rc.1 起；`settingsScope`，0.1.x），被拒或缺失时退回 `/api/config` —— host 侧最终写的是同一处（profile 补丁或配置文件） |
 | 说明气泡 / 清理确认框（`shell.overlay`） | 本插件 | `?` = 锚在该行下方的小气泡（任务数量 / 根目录 / 配置来源 / 记录文件 / **版本（插件后端 + 插件界面）** / 会话在哪 / 与 dsh-side-session 的区别 / 更多设置入口）。版本那一行会说清两半的区别：**插件后端**（Node 侧，只在 DSH 启动时加载 → 改插件要重启 DSH）与**插件界面**（按页面加载 → 刷新页面即更新）；两半不一致时会直接提示"重启 DSH"。它是**悬浮详情**：鼠标在气泡上就不动，离开约 0.6s 后自动收起——**没有手动关闭按钮**（再点一次 `?` 也会收起）；**垃圾桶** = 居中确认框（勾选列表 + 二次确认）；**齿轮** = 操作面板（**不会**自动收起）；另有创建失败时的小提示。都渲染在浮层里——不会被侧边栏裁掉，也不会嵌套进官方那个 `<button>` |
 | 兜底空面板（`main`，key=`dsh-temptask`） | 本插件 | **渲染 null 并立刻切回 conversation**。那一行在官方源码里是导航按钮（`onClick: selectPanel(id)`，键盘 Enter/Space 也只走它）——有这个兜底，误触只会闪一下，绝不会出现空白页或新页面 |
 | 清理对话框 | 本插件 | 任务勾选列表（默认勾选已关闭的）、全选/全不选、二次确认 |
@@ -150,7 +158,14 @@ DSH 的树按「工作区归属」分组，而会话归到某个工作区当且�
 
 ## 5. 配置
 
-主通道是 DSH 官方 settings 命名空间 `dsh-temptask`（「设置 → 插件 → 临时任务」可改，立即生效）：
+配置的**所有权按 DSH 版本走**，但对使用者都是同一件事：在「设置 → 插件 → 临时任务」里改。
+
+| DSH | 主通道 | 存放位置 |
+| --- | --- | --- |
+| `0.2.0-rc.1` 起 | 本插件的 **Config schema**（`lib/index.js` 导出 `Config`，四个字段都标了 volatile） | profile 的 `cordis.patch.yml` 里本插件那一行的 `config:` |
+| `0.1.x` | settings 命名空间 `dsh-temptask`（`ctx.settings.register`） | DSH 的 settings 文档 |
+
+四个键都一样：
 
 | 键 | 默认 | 说明 |
 | --- | --- | --- |
@@ -159,7 +174,7 @@ DSH 的树按「工作区归属」分组，而会话归到某个工作区当且�
 | `onDeleteSessions` | `archive` | 删除任务（含自动清理）时如何处理它的会话：`archive` = 归档（从侧边栏消失，日志保留）/ `keep` = 留在「未分组」。见 §6 |
 | `dataDir` | `<DSH_HOME>/plugin-data/dsh-temptask` | 插件数据目录（改它需要重启 DSH 才切换记录文件） |
 
-也可以在 `cordis.patch.yml` 的插件行里给初始值（优先级低于设置页）：
+也可以在 `cordis.patch.yml` 的插件行里给初始值（0.2.0-rc.1 起设置表单改的就是这一行）：
 
 ```yaml
 - insert:
@@ -169,7 +184,23 @@ DSH 的树按「工作区归属」分组，而会话归到某个工作区当且�
         autoCleanDays: 7
 ```
 
-**降级通道**：宿主没有 settings 服务、或缺 `@deepseek-ai/dsh-settings`/`schemastery` 时，
+**为什么 0.2.0-rc.1 换了形态**：新宿主的 `ctx.settings`（`SettingsForms`）不再提供
+`register(namespace, schema)`，那个被 `settingsNamespace` 品牌化的命名空间注册表已经删掉了；
+取而代之的是「插件用自己 Config 里的 volatile 字段声明设置」，读取时字段是**活引用**
+（`config.rootDir.get()`），写入统一走 `ctx.configEditor.edit(entry, …)`。本插件因此：
+
+- 导出 `Config`（schemastery `z.object`，`rootDir` / `autoCleanDays` / `onDeleteSessions` / `dataDir` 全部 `.volatile()`），
+  官方「设置 → 插件」表单据此渲染；
+- `apply(ctx, config)` 里读字段时兼容两种形态（引用取 `.get()`，普通值直接用）；
+- 写入优先走 `configEditor`（与官方表单同一处），其次是 0.1.x 的 settings 命名空间，
+  最后才退回 `config.json`；
+- 监听加载器的 `loader/volatile-update` 事件：官方表单改完配置，插件当场重读引用、
+  必要时重新载入清单（改 `rootDir` 立即生效，不用重启 DSH）。
+
+**注意**：`@deepseek-ai/schemastery` 3.18.4 才有 `.volatile()`；0.1.x 宿主附带的是 3.18.2，
+那里会自动退化成普通字段（配置仍可用，只是表单少了热更新语义）。
+
+**降级通道**：宿主既没有 `configEditor`、也没有 settings 服务、或取不到 schemastery 时，
 插件不会加载失败，而是改用 `<dataDir>/config.json`（设置卡片会显示「配置来源」）。
 
 ## 6. 数据与文件布局
@@ -235,13 +266,14 @@ session-query 的内存缓存与 `session_projcache` 的 sqlite，属于碰私�
 
 ```
         ┌──────────────── client half (浏览器) ────────────────┐
-        │ sidebar.footer.action → 「＋ 新建临时任务」菜单         │
-        │ shell.overlay        → 常驻守护（消费 pendingOpen）    │
+        │ sidebar.panellist    → 「临时任务」那一行 + 四个动作    │
+        │ shell.overlay        → 说明气泡 / 清理框 / 齿轮 / 守护 │
         │ settings.section     → 配置卡片 + 清理入口             │
         │ （任务列表本身由官方 WorkspaceBrowser 按工作区分组渲染）│
         └───────────────┬──────────────────────────────────────┘
                         │  fetch("/dsh-temptask/api/*")   ← 同源 + 回环围栏
         ┌───────────────▼──────────── host half (Node) ────────┐
+        │ index/host.ts 导出 Config（官方设置表单）+ apply 装配   │
         │ routes.ts     状态 / 新建 / 打开 / 删除 / 清理 / ack / 配置 │
         │ tasks.ts      目录 + 工作区 + 会话 + 登记 + 清理          │
         │ workspaces.ts 工作区建/查/改名/删（侧边栏节点就是它）  │
@@ -251,6 +283,10 @@ session-query 的内存缓存与 `session_projcache` 的 sqlite，属于碰私�
         │ sessions.ts   sessionController.create({ cwd })        │
         └───────────────────────────────────────────────────────┘
 ```
+
+**配置写入的三条路**（按宿主能力选，见 §5）：`configEditor.edit`（0.2.0-rc.1）→
+0.1.x 的 settings 命名空间 → `<dataDir>/config.json`；官方设置表单与插件自己的齿轮面板
+最终都落到同一处。
 
 **创建一个任务时的顺序（不能改）**：
 
@@ -309,7 +345,7 @@ pnpm check         # typecheck + build + check:pack + smoke + check:registration
 `check:pack` 也挂在 `prepack` 上，所以 `npm pack` / `npm publish` 之前会自动跑一遍：
 `files` 少写一条（例如漏了 `src`）在源码目录里跑测试是发现不了的，只有装包的人才会撞上。
 
-`scripts/smoke.mjs`（**40 项**）用桩 Cordis 上下文挂载 `lib/index.js` 直打 HTTP 路由。
+`scripts/smoke.mjs`（**50 项**）用桩 Cordis 上下文挂载 `lib/index.js` 直打 HTTP 路由。
 桩里的 `workspaceRegistry` **刻意复刻 DSH 的语义**（`create` 走真实 `realpath`、`attachSession`
 硬校验 `cwd === workspace.path`），覆盖：时间戳目录、任务=工作区、会话只传 `cwd`、挂载、
 **会话标题变化不改动节点名**（回归用例：发 `session/title` 事件后节点标题仍是目录名、且一次
@@ -322,7 +358,12 @@ pnpm check         # typecheck + build + check:pack + smoke + check:registration
 **缺 workspaceRegistry 时拒绝建任务并回滚目录**、**`/open-root` 走官方 `openWorkspacePath` 打开任务
 根目录**、**宿主不能打开文件夹时能力位为 false 且接口如实返回原因**、
 **数据安全：在任务根目录里放未登记的目录/文件，`clean --all` 与 `autoCleanDays` 都不能碰它们**、
-两个 host 进程并发、服务全缺失时优雅降级。
+两个 host 进程并发、服务全缺失时优雅降级；
+以及 **0.2.0-rc.1 的配置模型**：行配置是 volatile 引用时取到引用里的当前值、
+配置来源标为 `plugin-config`、`/api/config` 走 `configEditor.edit`（且不落 `config.json`、
+未改动字段原样保留）、改完根目录立刻生效、`loader/volatile-update` 后重读引用、
+没有 `configEditor` 的宿主仍写 `config.json`、以及
+**`Config` schema 契约**（4 个字段；schemastery 3.18.4 上标 volatile，3.18.2 上不标）。
 
 `scripts/smoke-client.mjs`（**27 项**）按 DSH 的方式装载 `client/client.js`
 （`window.__ModuleLoader__`），断言工厂**只** `require("react")`（任何对宿主包的 require 都会让这条桩
@@ -338,18 +379,32 @@ pnpm check         # typecheck + build + check:pack + smoke + check:registration
 并把各组件真渲染一遍（`react-dom/server`）。
 
 `scripts/check-registration.mjs`（**3 项**）补上前面那些桩测不到的一环：它加载**宿主真实的**
-`@deepseek-ai/dsh-client-modules`（从 DSH 桌面应用的 `resources/app/node_modules` 找），
-按浏览器的顺序装好 `window.__ModuleLoader__` 队列门面，然后走一遍宿主那条判据
-（`loadBundle(url)` → `factories.has(row.id)`）。这条判据要求 **ModuleLoader 的注册 id 必须等于包名**
-（`row.id` 就是加载器条目名），所以注册 id 由 `scripts/build-client.mjs` 从 `package.json` 的 `name` 现读，
-不再手写。本机没有 DSH 时该项自动跳过（打印原因并以 0 退出），不影响 `npm run check`。
+`@deepseek-ai/dsh-client-modules`，按浏览器的顺序装好 `window.__ModuleLoader__` 队列门面，
+然后走一遍宿主那条判据（`loadBundle(url)` → `factories.has(row.id)`）。这条判据要求
+**ModuleLoader 的注册 id 必须等于包名**（`row.id` 就是加载器条目名），所以注册 id 由
+`scripts/build-client.mjs` 从 `package.json` 的 `name` 现读，不再手写。
+
+宿主代码的位置按版本换过地方，脚本按顺序找：`DSH_APP_ROOT` 环境变量 →
+`C:\Program Files\DSH Desktop\resources\app\node_modules\…`（0.1.x 三方桌面版）→ 本包依赖。
+**官方 DeepSeek Harness 桌面版 0.2.x 起把 dsh 运行时打包进了 `app.asar`**，普通 Node 读不到
+asar 内部的文件，所以要在新宿主上跑这一项得先解包，再指过去：
+
+```powershell
+# 把 app.asar 里的 dsh/ 树解包到任意目录（asar 头是标准的，解包工具用什么都行）
+$env:DSH_APP_ROOT = '<解包出来的 dsh 目录>'
+npm run check:registration
+```
+
+脚本会自动适配两代 `makeRequire` 签名（0.1.x 是 `(edges)`，0.2.x 是 `(ownerId, edges)`），
+本机没有 DSH 时该项自动跳过（打印原因并以 0 退出），不影响 `npm run check`。
 
 ## 10. 排错
 
 | 现象 | 处理 |
 | --- | --- |
 | 界面弹「部分插件加载失败 / Failed to load plugins」，文案里有 `loaded without registering "@aeroscis/dsh-temptask"` | **已在 0.3.2 修复**（0.3.0 / 0.3.1 的客户端注册 id 写成了短名）。升级到 ≥0.3.2 后重启 DSH 即可；`pnpm check:registration` 能在发版前拦住这类不匹配 |
-| 侧边栏没有「临时任务」这一行 | 确认 profile 名对不对、插件是否装上；看 DSH 日志里有没有 `[dsh-temptask]`；窄栏（折叠）时它只剩图标，悬停有提示 |
+| 侧边栏没有「临时任务」这一行 | 确认 profile 名对不对、插件是否装上；看 DSH 日志里有没有 `[dsh-temptask]`；窄栏（折叠）时它只剩图标，悬停有提示。**DSH 0.2.0-rc.1 起还有一道兼容性门槛**：插件声明的 `@deepseek-ai/dsh*` peer 范围不满足时，宿主会整条 bundle 跳过并在日志里写 `skipping profile bundle "@aeroscis/dsh-temptask"`，此时升级到 ≥0.4.0 即可（0.3.3 声明的是 `^0.1.5-rc.2`，过不了 0.2.x 的门） |
+| 设置里看不到「临时任务」这一节 | 0.2.0-rc.1 起这一节由插件自己的 `Config` schema 生成（设置 → 插件）；若整个「插件」页都没有，说明该宿主没挂 `dsh-settings`/`config-editor`（例如 `dsh` CLI 自建 profile 上没有 `profileContext`），此时配置走插件的齿轮面板（写入落到 `<dataDir>/config.json`） |
 | 改了插件代码，行为却还是旧的 | **插件后端（Node 侧）只在 DSH 启动时加载**——必须重启 DSH；插件界面（页面）刷新即更新。点 `?` 看「版本」那一行：`插件后端 v…　·　插件界面 v…`，两半不一致时会直接提示「重启 DSH」。启动日志里也有 `[dsh-temptask] v<版本> 已就绪…`。三处版本号都应与 `package.json` 一致 |
 | 点了「新建」但没看到节点 | 节点是工作区，刷新/展开侧边栏；设置卡片里若提示「未提供 workspaceRegistry」，说明该宿主无法建节点（任务目录仍会创建） |
 | 节点名一直是时间戳 | **这是预期行为**：节点名 = 目录名（DSH 默认语义），本插件不改写它；DSH 总结的会话标题显示在该节点下的会话行上。想改节点名就在节点上右键重命名 |
@@ -379,6 +434,11 @@ pnpm check         # typecheck + build + check:pack + smoke + check:registration
 6. **切语言**：英文界面下那一行 tooltip、`?` 气泡、齿轮文案要跟着变。
 7. **`?` 悬浮收起**：鼠标进出气泡；以及"点完 `?` 不碰它、直接移开鼠标"也要关。
 8. **窄栏**：侧边栏折叠后只剩 ＋，点它应能新建。
+9. **设置表单（0.2.0-rc.1）**：「设置 → 插件 → 临时任务」里能改根目录 / 自动清理天数，
+   改完**不重启**就该生效（改 `rootDir` 后新建任务落到新目录）；`?` 气泡里的「配置来源」应显示
+   「DSH 插件配置」，profile 的 `cordis.patch.yml` 里本插件那一行应该长出 `config:` 段。
+10. **两半版本**：0.2.0-rc.1 上重启后 `?` 里两半都应显示 `0.4.0`（后端是 Node 侧的编译产物，
+    改完必须重启 DSH 才会换）。
 
 ### 发布前需要人工确认
 

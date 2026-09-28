@@ -28,6 +28,11 @@ function check(label, fn) {
   passed += 1;
   console.log(`  ✓ ${label}`);
 }
+async function checkAsync(label, fn) {
+  await fn();
+  passed += 1;
+  console.log(`  ✓ ${label}`);
+}
 
 /* ── 1. 以浏览器的方式装载包 ── */
 const packageJson = JSON.parse(await readFile(new URL('../package.json', import.meta.url), 'utf8'));
@@ -92,6 +97,9 @@ check('模块导出带 inject/apply', () => {
 
 /* ── 2. 桩客户端上下文 ── */
 
+/**
+ * 桩 settingsScope（0.1.x 的客户端配置通道）。
+ */
 const scopeStub = {
   getSnapshot: () => ({
     status: 'ready',
@@ -112,9 +120,18 @@ const LOCALES = {
 };
 let activeLocale = 'zh';
 
-function createClientStub({ withSettings = true, withLocale = true } = {}) {
+function createClientStub({
+  withSettings = true,
+  withLocale = true,
+  withConfigForms = true,
+  withUiWorkspace = true,
+  configFormAccepts = true,
+} = {}) {
   const registrations = [];
   const opened = [];
+  const legacyBinds = [];
+  const configFormRequests = [];
+  const configFormWrites = [];
   const slots = {
     register(options, component) {
       registrations.push({ options, component });
@@ -130,14 +147,47 @@ function createClientStub({ withSettings = true, withLocale = true } = {}) {
     bind: () => (key) => (LOCALES[activeLocale] ?? {})[key] ?? key,
     getLocale: () => ({ id: activeLocale }),
   };
+  /** 桩 configForms（0.2.0 的客户端配置表单）：`set` 用布尔回答「宿主收没收」。 */
+  const configForm = {
+    getSnapshot: () => ({
+      status: 'ready',
+      writable: true,
+      value: { rootDir: 'C:\\Users\\me\\.dsh\\dsh-temptask', autoCleanDays: 7 },
+    }),
+    subscribe: () => () => {},
+    set: async (field, value) => {
+      configFormWrites.push([field, value]);
+      return configFormAccepts;
+    },
+    unset: async (field) => {
+      configFormWrites.push([field, undefined]);
+      return configFormAccepts;
+    },
+  };
   const ctx = {
     logger: { info: () => {}, warn: () => {} },
     get(name) {
       if (name === 'slots') return slots;
       if (name === 'locale') return withLocale ? locale : undefined;
+      if (name === 'configForms' && withConfigForms) {
+        return {
+          get: (entryId) => {
+            configFormRequests.push(entryId);
+            return configForm;
+          },
+        };
+      }
+      if (name === 'uiWorkspace' && withUiWorkspace) return { openSession: (id) => opened.push(id) };
       if (name === 'sessions') return { open: (id) => opened.push(id) };
       if (name === 'layout') return { selectPanel: () => {} };
-      if (name === 'settingsScope' && withSettings) return { bind: () => scopeStub };
+      if (name === 'settingsScope' && withSettings) {
+        return {
+          bind: ({ namespace }) => {
+            legacyBinds.push(namespace);
+            return scopeStub;
+          },
+        };
+      }
       return undefined;
     },
     effect(fn) {
@@ -147,7 +197,15 @@ function createClientStub({ withSettings = true, withLocale = true } = {}) {
       };
     },
   };
-  return { ctx, registrations, opened };
+  return {
+    ctx,
+    registrations,
+    opened,
+    legacyBinds,
+    configFormRequests,
+    configFormWrites,
+    configForm,
+  };
 }
 
 const { ctx, registrations } = createClientStub();
@@ -575,12 +633,96 @@ check('设置卡片渲染根目录 / 自动清理 / 与 dsh-side-session 的区�
   assert.ok(markup.includes('保存'), markup);
 });
 
-check('settingsScope 缺失时只注册 4 个插槽（设置卡片降级跳过）', () => {
-  const bare = createClientStub({ withSettings: false });
+check('配置通道缺失时也注册 5 个插槽：设置卡片改走插件自己的 HTTP 接口', () => {
+  const bare = createClientStub({
+    withSettings: false,
+    withConfigForms: false,
+    withUiWorkspace: false,
+  });
   plugin.apply(bare.ctx);
   assert.deepEqual(
     bare.registrations.map((item) => item.options.name),
-    ['sidebar.panellist', 'main', 'shell.overlay', 'shell.overlay'],
+    ['sidebar.panellist', 'main', 'shell.overlay', 'shell.overlay', 'settings.section'],
+  );
+});
+
+check('0.2.0：配置通道优先用 configForms.get(profile 行 id)，不再去 bind settingsScope', () => {
+  const bare = createClientStub({ withSettings: true, withConfigForms: true });
+  plugin.apply(bare.ctx);
+  assert.deepEqual(
+    bare.configFormRequests,
+    ['dsh-temptask'],
+    'configForms 按 profile 条目 id（本插件那一行 = dsh-temptask）寻址',
+  );
+  assert.deepEqual(bare.legacyBinds, [], '有新通道时不该再退回 settingsScope');
+});
+
+check('0.1.x：没有 configForms 时退回 settingsScope.bind({ namespace })', () => {
+  const bare = createClientStub({ withSettings: true, withConfigForms: false });
+  plugin.apply(bare.ctx);
+  assert.deepEqual(bare.configFormRequests, []);
+  assert.deepEqual(bare.legacyBinds, ['dsh-temptask']);
+});
+
+check('配置来源标签覆盖 0.2.0 的新来源，未知来源原样显示', () => {
+  const label = internals.configSourceLabel;
+  assert.equal(typeof label, 'function', '缺少 configSourceLabel');
+  assert.equal(label('plugin-config', runtime), 'DSH 插件配置（设置 → 插件 → 临时任务）');
+  assert.equal(label('settings', runtime), 'DSH 设置（设置 → 插件 → 临时任务）');
+  assert.equal(label('config-file', runtime), '插件数据目录下的 config.json');
+  assert.equal(label('cordis-row', runtime), '插件行配置（只读）');
+  assert.equal(label('defaults', runtime), '内置默认值');
+  assert.equal(label('something-new', runtime), 'something-new', '未知来源不猜，原样显示');
+});
+
+check('0.2.0：打开会话走 uiWorkspace.openSession（不再依赖 sessions.open）', () => {
+  const bare = createClientStub({ withUiWorkspace: true });
+  internals.createOpenSession(bare.ctx)('session-1');
+  assert.deepEqual(bare.opened, ['session-1']);
+});
+
+check('0.1.x：没有 uiWorkspace 时退回 sessions.open + layout.selectPanel', () => {
+  const bare = createClientStub({ withUiWorkspace: false });
+  internals.createOpenSession(bare.ctx)('session-2');
+  assert.deepEqual(bare.opened, ['session-2']);
+});
+
+await checkAsync('ConfigForm.set 被宿主接受（true）时直接成功，不再打插件自己的接口', async () => {
+  const scope = internals.adaptConfigForm({
+    getSnapshot: () => ({ status: 'ready' }),
+    subscribe: () => () => {},
+    set: async () => true,
+    unset: async () => true,
+  });
+  let fetched = 0;
+  globalThis.fetch = async () => {
+    fetched += 1;
+    return { ok: true, json: async () => ({ ok: true }) };
+  };
+  await internals.writeConfigField(scope, 'rootDir', 'C:\\x');
+  assert.equal(fetched, 0, '桥成功时不该再走 HTTP');
+});
+
+await checkAsync('ConfigForm 被拒（false）时抛错，并回退到插件自己的 /api/config', async () => {
+  const scope = internals.adaptConfigForm({
+    getSnapshot: () => ({ status: 'ready' }),
+    subscribe: () => () => {},
+    set: async () => false,
+    unset: async () => false,
+  });
+  let body;
+  globalThis.fetch = async (_url, init) => {
+    body = JSON.parse(init.body);
+    return { ok: true, json: async () => ({ ok: true }) };
+  };
+  await internals.writeConfigField(scope, 'onDeleteSessions', 'keep');
+  assert.deepEqual(body, { onDeleteSessions: 'keep' }, '被拒后应把同一份改动交给 host 自己的接口');
+
+  // 两条路都不通：必须抛错（组件据此显示失败，而不是假装保存成功）。
+  globalThis.fetch = async () => ({ ok: true, json: async () => ({ ok: false, message: '宿主拒绝' }) });
+  await assert.rejects(
+    () => internals.writeConfigField(scope, 'onDeleteSessions', 'keep'),
+    /宿主拒绝/,
   );
 });
 

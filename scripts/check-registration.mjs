@@ -47,15 +47,24 @@ function check(label, fn) {
   console.log(`  ✓ ${label}`);
 }
 
-/* ── 定位宿主包：环境变量给的 app 目录 → DSH 桌面默认安装位置 → 本地依赖 ── */
-const require = createRequire(import.meta.url);
+/** 宿主 dsh-client-modules 的位置（按宿主版本换过地方）。 */
 const CANDIDATES = [
+  // 显式指定：可以是 <安装了 @deepseek-ai/* 的根>，也可以是桌面应用解包出来的 dsh 运行时目录。
   process.env.DSH_APP_ROOT === undefined
     ? undefined
     : join(process.env.DSH_APP_ROOT, 'node_modules', '@deepseek-ai', 'dsh-client-modules'),
+  // 0.1.x 的三方桌面版：app 目录直接摊在 resources\app 下。
   'C:\\Program Files\\DSH Desktop\\resources\\app\\node_modules\\@deepseek-ai\\dsh-client-modules',
+  // 本包自己的依赖（把 @deepseek-ai/dsh-client-modules 装成 devDependency 时命中）。
   '@deepseek-ai/dsh-client-modules',
 ];
+/**
+ * 注意：官方 DeepSeek Harness 桌面版 0.2.x 起把 dsh 运行时**打包进了 app.asar**，
+ * 普通 Node 读不到 asar 里的文件，因此这台机器上要用
+ * `DSH_APP_ROOT=<解包出来的 dsh 目录>` 才能校验新宿主的实现；
+ * 没给就自动跳过（打印原因并以 0 退出），不会让 `npm run check` 失败。
+ */
+const require = createRequire(import.meta.url);
 
 let hostUrl;
 for (const candidate of CANDIDATES) {
@@ -175,10 +184,22 @@ check('对照：短名查不到工厂（0.3.0 / 0.3.1 的失败态）', () => {
 });
 
 /* ── 2. 宿主 Loader 真正接上插件时走的那一步：require("<包名>") ── */
+/**
+ * `makeRequire` 的签名在 0.2.0-rc.1 变了：
+ *   0.1.x：`makeRequire(edges)`；
+ *   0.2.x：`makeRequire(ownerId, edges)`——ownerId 用来给 styles / 归属诊断记账。
+ * 按形参个数选，两种宿主都能验（写死一种会在另一个宿主上以
+ * 「Cannot read properties of undefined (reading 'add')」的形式假失败）。
+ */
+const edges = new Set();
 let plugin;
 let requireError;
 try {
-  plugin = moduleSystem.makeRequire(new Set())(PACKAGE_NAME);
+  const require =
+    moduleSystem.makeRequire.length >= 2
+      ? moduleSystem.makeRequire(PACKAGE_NAME, edges)
+      : moduleSystem.makeRequire(edges);
+  plugin = require(PACKAGE_NAME);
 } catch (error) {
   requireError = error;
 }

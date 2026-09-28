@@ -18,14 +18,26 @@ interface DshLogger {
   debug?(message: string): void;
 }
 
+/** Cordis fiber：本插件只读 `entry`（配置写入要拿它当身份）。 */
+interface DshFiberLike {
+  readonly uid?: string | null;
+  readonly entry?: DshConfigEntryLike;
+}
+
 /** Cordis Context：只列出本插件使用的方法。 */
 interface DshContext {
   readonly logger?: DshLogger;
+  /** 插件自己的 fiber（`entry` = profile 里那一行）。旧宿主上可能没有。 */
+  readonly fiber?: DshFiberLike;
   /** 可选服务读取：拿到 undefined 时必须自行降级。 */
   get<T = unknown>(name: string): T | undefined;
   /** 硬依赖注入：依赖出现后才执行回调，随该 fiber 卸载自动回收。 */
   inject(names: string[], callback: (ctx: DshContext) => void | (() => void)): () => void;
-  on(event: string, listener: (...args: never[]) => void): () => void;
+  on(
+    event: string,
+    listener: (...args: never[]) => void,
+    options?: { prepend?: boolean; global?: boolean },
+  ): () => void;
   effect(callback: () => void | (() => void), label?: string): () => void;
 }
 
@@ -64,7 +76,7 @@ interface DshWebServerService {
   register(route: DshWebRoute): () => void;
 }
 
-/** `ctx.settings` — 官方配置服务（动态 import 的 schema 由 schemastery 提供）。 */
+/** `ctx.settings` — 官方配置服务。 */
 interface DshSettingsScope {
   get(): unknown;
   set(key: string, value: unknown): Promise<void>;
@@ -73,8 +85,36 @@ interface DshSettingsScope {
   dispose?(): void;
 }
 interface DshSettingsService {
-  readonly writable: boolean;
-  register(namespace: string, schema: unknown, options?: { base?: unknown }): DshSettingsScope;
+  readonly writable?: boolean;
+  /**
+   * 0.1.x 的「插件注册 settings 命名空间」入口。
+   * **0.2.0-rc.1 起已移除**：新宿主的 settings 服务（`SettingsForms`）只投影各插件
+   * 条目 Config schema 里的 volatile 字段，没有 `register`。因此这里是可选的。
+   */
+  register?(
+    namespace: string,
+    schema: unknown,
+    options?: { base?: unknown },
+  ): DshSettingsScope;
+}
+
+/**
+ * `ctx.configEditor` — 0.2.0-rc.1 起插件配置的写入口。
+ * 它把配置写进 profile 的 cordis 补丁（`cordis.patch.yml`），
+ * 与官方「设置 → 插件」表单改的是同一处。
+ */
+interface DshConfigEntryLike {
+  readonly id?: string;
+  readonly name?: string;
+  readonly options?: { readonly id?: string; readonly name?: string };
+}
+interface DshConfigEditorService {
+  /**
+   * 校验、落盘并让 Loader 重新对账一次配置。
+   * @param entry 当前 Loader 条目（用 `ctx.fiber.entry` 拿）。
+   * @param change 由「当前行配置 + 继承层」推出**完整**的下一份行配置。
+   */
+  edit(entry: unknown, change: (current: unknown, inherited: unknown) => unknown): Promise<void>;
 }
 
 /** `ctx.sessionController` — 会话业务面（`ctx.remote.session` 的 host 实现）。 */
@@ -197,9 +237,18 @@ interface DshLocaleService {
   subscribe?(callback: () => void): () => void;
 }
 
-/** 客户端 sessions 服务：`open` 只能打开客户端已知的会话，未知会抛错。 */
+/** 客户端 sessions 服务（0.1.x：`open` 只能打开客户端已知的会话）。 */
 interface DshClientSessionsService {
   open(id: string): void;
+}
+
+/**
+ * 客户端 `ctx.uiWorkspace` —— **0.2.0-rc.1 打开会话的正规入口**。
+ * 旧宿主的 `ctx.sessions.open(id)` 在新宿主里不存在（`ctx.sessions` 已换成
+ * retain/binding/scope/fork 那套底层面），打开会话统一走 `openSession(target)`。
+ */
+interface DshUiWorkspaceService {
+  openSession(target: string): void;
 }
 
 /** 客户端 layout 服务：主面板选择。 */
@@ -216,8 +265,24 @@ interface DshClientSettingsScope {
   unset(key: string): Promise<void>;
   dispose?(): void;
 }
+/** 0.1.x：`ctx.settingsScope.bind({ namespace })`。 */
 interface DshSettingsScopeBinder {
   bind(options: { namespace: string }): DshClientSettingsScope;
+}
+
+/**
+ * 0.2.0-rc.1：`ctx.configForms.get(entryId)` —— 客户端侧的插件配置表单。
+ * `entryId` 就是 profile 里那一行的 id（本插件为 `dsh-temptask`）。
+ * 写入走远程 `settings.mutate`；`set` 返回是否被宿主接受（false = 被拒/只读）。
+ */
+interface DshClientConfigForm {
+  getSnapshot(): { status: string; value?: unknown; writable?: boolean };
+  subscribe(listener: () => void): () => void;
+  set(field: string, value: unknown): Promise<boolean>;
+  unset(field: string): Promise<boolean>;
+}
+interface DshConfigFormsService {
+  get(entryId: string): DshClientConfigForm;
 }
 
 /* ─────────────────────── 浏览器侧全局 ─────────────────────── */
@@ -244,6 +309,8 @@ declare module '@deepseek-ai/schemastery' {
   export interface SchemasteryField {
     default(value: unknown): SchemasteryField;
     description(text: string): SchemasteryField;
+    /** 3.18.4 才有；旧宿主上是 undefined（见 config.ts 的 `live()`）。 */
+    volatile?(): SchemasteryField;
   }
   /** schemastery 的 z：本插件只用到最小子集。 */
   export interface SchemaLike {

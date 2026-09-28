@@ -98,8 +98,11 @@ const ZH: Record<string, string> = {
   versionHint:
     '「插件后端」只在 DSH 启动时加载（改了插件要重启 DSH）；「插件界面」刷新页面即更新。两者都是本插件的版本，与 DSH 自身版本无关。',
   versionMismatch: '⚠️ 两半版本不一致：有一半还是旧的——重启 DSH 可让两半同时更新。',
+  pluginManaged: 'DSH 插件配置（设置 → 插件 → 临时任务）',
   settingsManaged: 'DSH 设置（设置 → 插件 → 临时任务）',
   fileManaged: '插件数据目录下的 config.json',
+  rowManaged: '插件行配置（只读）',
+  defaultsManaged: '内置默认值',
   moreSettings: '更多设置 → 设置 → 插件 → 临时任务',
   autoCloseHint: '鼠标移开后自动关闭（再点一次 ? 也会收起）',
   cleanTitle: '清理临时任务',
@@ -171,8 +174,11 @@ const EN: Record<string, string> = {
   versionHint:
     'The backend half loads only when DSH starts (restart DSH after changing the plugin); the UI half updates on page reload. Both are this plugin\u2019s own versions, unrelated to the DSH version.',
   versionMismatch: '⚠️ Halves disagree — one of them is still the old build. Restarting DSH updates both.',
+  pluginManaged: 'DSH plugin config (Settings → Plugins → Temporary tasks)',
   settingsManaged: 'DSH settings (Settings → Plugins → Temporary tasks)',
   fileManaged: 'config.json in the plugin data directory',
+  rowManaged: 'plugin row config (read-only)',
+  defaultsManaged: 'built-in defaults',
   moreSettings: 'More settings → Settings → Plugins → Temporary tasks',
   autoCloseHint: 'Closes automatically when the pointer leaves (clicking ? again also collapses it)',
   cleanTitle: 'Clean up temporary tasks',
@@ -333,9 +339,110 @@ interface Runtime {
   notice(message: string): void;
 }
 
+/* ─────────────────────────── 配置读写桥 ─────────────────────────── */
+
+/**
+ * 把 0.2.0-rc.1 的 `ctx.configForms.get(entryId)` 适配成组件认识的 shape。
+ *
+ * 为什么 `set` 要抛：ConfigForm 的 `set` 用布尔回答「宿主收没收」，
+ * 而组件靠异常分支显示失败；返回 false 却当作成功会给出「已保存」的假象。
+ */
+function adaptConfigForm(form: DshClientConfigForm): DshClientSettingsScope {
+  const require = (accepted: boolean, action: string): void => {
+    if (accepted !== true) throw new Error(`宿主拒绝了这次配置${action}`);
+  };
+  return {
+    getSnapshot: () => form.getSnapshot(),
+    subscribe: (listener) => form.subscribe(listener),
+    set: async (key, value) => require(await form.set(key, value), '写入'),
+    unset: async (key) => require(await form.unset(key), '清除'),
+  };
+}
+
+/**
+ * 找一条客户端配置通道：
+ *   1. 0.2.0-rc.1：`configForms.get(行 id)` —— 与官方「设置 → 插件」表单同一份数据；
+ *   2. 0.1.x：`settingsScope.bind({ namespace })` —— 老宿主上的 settings 命名空间；
+ *   3. 都没有：undefined，组件退回插件自己的 `/api/config`（host 端写 profile 或 config.json）。
+ */
+function resolveConfigScope(ctx: ClientContext): DshClientSettingsScope | undefined {
+  const forms = ctx.get<DshConfigFormsService>('configForms');
+  if (forms !== undefined && typeof forms.get === 'function') {
+    try {
+      return adaptConfigForm(forms.get(NS));
+    } catch (error) {
+      ctx.logger?.warn?.(`[dsh-temptask] configForms 不可用，配置改走插件自己的通道：${String(error)}`);
+    }
+  }
+  const binder = ctx.get<DshSettingsScopeBinder>('settingsScope');
+  if (binder !== undefined && typeof binder.bind === 'function') {
+    try {
+      return binder.bind({ namespace: NS });
+    } catch (error) {
+      ctx.logger?.warn?.(`[dsh-temptask] settingsScope 绑定失败：${String(error)}`);
+    }
+  }
+  return undefined;
+}
+
+/**
+ * 写一项配置：先走客户端配置桥，桥不可用或被拒时退回插件自己的 HTTP 通道。
+ * 两条路的 host 端最终都写进同一处（新宿主是 profile 补丁，旧宿主是 settings/配置文件）。
+ */
+async function writeConfigField(
+  scope: DshClientSettingsScope | undefined,
+  field: string,
+  value: unknown,
+): Promise<void> {
+  let bridgeError: unknown;
+  if (scope !== undefined && typeof scope.set === 'function') {
+    try {
+      await scope.set(field, value);
+      return;
+    } catch (error) {
+      bridgeError = error;
+    }
+  }
+  const result = await call('/config', 'POST', { [field]: value });
+  if (result.ok) return;
+  throw new Error(result.message.length > 0 ? result.message : String(bridgeError ?? '配置写入失败'));
+}
+
 /** 一行的展示名：工作区标题（= 目录 basename，本插件不改写它）；缺失时回落到目录名。 */
 function labelOf(task: TaskView): string {
   return task.title !== undefined && task.title.length > 0 ? task.title : task.dirName;
+}
+
+/**
+ * 打开会话：客户端只认识「已知会话」，刚创建的会话可能晚一拍到达，所以带重试。
+ *
+ * 入口按宿主版本选：0.2.0-rc.1 起统一走 `ctx.uiWorkspace.openSession(target)`
+ * （它一次做完「选中会话 + 切到对话面板」，旧宿主的 `ctx.sessions.open` 在新宿主里已不存在）；
+ * 0.1.x 上退回 `sessions.open` + `layout.selectPanel('conversation')`。
+ */
+function createOpenSession(ctx: ClientContext): (sessionId: string, attempt?: number) => void {
+  return function openSession(sessionId: string, attempt = 0): void {
+    const uiWorkspace = ctx.get<DshUiWorkspaceService>('uiWorkspace');
+    const sessions = ctx.get<DshClientSessionsService>('sessions');
+    try {
+      if (uiWorkspace !== undefined && typeof uiWorkspace.openSession === 'function') {
+        uiWorkspace.openSession(sessionId);
+      } else if (sessions !== undefined && typeof sessions.open === 'function') {
+        sessions.open(sessionId);
+        ctx.get<DshLayoutService>('layout')?.selectPanel('conversation');
+      } else {
+        throw new Error('既没有 uiWorkspace 也没有 sessions 服务');
+      }
+    } catch (error) {
+      if (attempt < 8) {
+        setTimeout(() => openSession(sessionId, attempt + 1), 400);
+        return;
+      }
+      ctx.logger?.warn?.(
+        `[dsh-temptask] 会话 ${sessionId} 尚未出现在会话列表中，请从侧边栏任务节点下打开：${String(error)}`,
+      );
+    }
+  };
 }
 
 /**
@@ -346,6 +453,24 @@ function labelOf(task: TaskView): string {
  */
 function halvesDiffer(hostVersion: string | undefined, clientVersion: string): boolean {
   return hostVersion !== undefined && hostVersion !== clientVersion;
+}
+
+/** 配置来源 → 人类可读标签（未知来源原样显示，便于排查新版宿主）。 */
+function configSourceLabel(source: string | undefined, runtime: Runtime): string {
+  switch (source) {
+    case 'plugin-config':
+      return runtime.t('pluginManaged');
+    case 'settings':
+      return runtime.t('settingsManaged');
+    case 'config-file':
+      return runtime.t('fileManaged');
+    case 'cordis-row':
+      return runtime.t('rowManaged');
+    case 'defaults':
+      return runtime.t('defaultsManaged');
+    default:
+      return source ?? '…';
+  }
 }
 
 /**
@@ -850,13 +975,13 @@ function TemptaskRow(props: RowProps): React.ReactElement {
 interface TrayProps {
   runtime: Runtime;
   tray: Tray;
-  /** settingsScope（拿不到时齿轮退回 /api/config 降级通道）。 */
+  /** 客户端配置通道（0.2.0 的 configForms / 0.1.x 的 settingsScope）；拿不到时退回插件 HTTP 接口。 */
   scope?: DshClientSettingsScope;
 }
 
 function TemptaskTray(props: TrayProps): React.ReactElement | null {
   const { runtime, tray } = props;
-  // settingsScope 可能由外部注入（离线渲染自测用），否则用 apply 时绑定的那个
+  // 配置通道可能由外部注入（离线渲染自测用），否则用 apply 时解析到的那个
   const scope = props.scope;
   const [state, setState] = React.useState<TrayState>(() => tray.get());
   const [tasks, setTasks] = React.useState<TaskView[]>([]);
@@ -984,11 +1109,7 @@ function TemptaskTray(props: TrayProps): React.ReactElement | null {
           <span className="__tt_key">{runtime.t('rootDir')}</span>
           <span className="__tt_val">{snapshot?.rootDir ?? '…'}</span>
           <span className="__tt_key">{runtime.t('configSource')}</span>
-          <span className="__tt_val">
-            {snapshot?.configSource === 'settings'
-              ? runtime.t('settingsManaged')
-              : runtime.t('fileManaged')}
-          </span>
+          <span className="__tt_val">{configSourceLabel(snapshot?.configSource, runtime)}</span>
           <span className="__tt_key">{runtime.t('dataFile')}</span>
           <span className="__tt_val">{snapshot?.dataFile ?? '…'}</span>
           <span className="__tt_key">{runtime.t('versionLabel')}</span>
@@ -1109,15 +1230,11 @@ function TaskSettingsPanel(props: TaskSettingsProps): React.ReactElement {
     setError(null);
     setValue(next);
     try {
-      if (scope !== undefined && typeof scope.set === 'function') {
-        await scope.set('onDeleteSessions', next);
-      } else {
-        const result = await call('/config', 'POST', { onDeleteSessions: next });
-        if (!result.ok) throw new Error(result.message);
-      }
+      await writeConfigField(scope, 'onDeleteSessions', next);
       setNotice(runtime.t('settingsSaved'));
       props.onSaved();
     } catch (cause) {
+      setValue(props.policy);
       setError(`${runtime.t('settingsFailed')}：${String((cause as Error)?.message ?? cause)}`);
     } finally {
       setBusy(false);
@@ -1343,7 +1460,8 @@ function PendingOpenWatcher(props: { runtime: Runtime }): null {
 /* ─────────────────────────── 设置卡片 ─────────────────────────── */
 
 interface SettingsProps {
-  scope: DshClientSettingsScope;
+  /** 可选的客户端配置通道；拿不到时全部走插件自己的 HTTP 接口。 */
+  scope?: DshClientSettingsScope;
   initial: TemptaskConfig;
   runtime: Runtime;
 }
@@ -1356,6 +1474,8 @@ function SettingsSection(props: SettingsProps): React.ReactElement {
   const [notice, setNotice] = React.useState<string | null>(null);
   const [error, setError] = React.useState<string | null>(null);
   const [cleanOpen, setCleanOpen] = React.useState(false);
+  /** 用户改过但还没保存时为 true：期间不让后台拉取覆盖草稿。 */
+  const [edited, setEdited] = React.useState(false);
 
   const pull = React.useCallback(async (): Promise<void> => {
     const result = await call<TemptaskState>('/state', 'GET');
@@ -1363,30 +1483,32 @@ function SettingsSection(props: SettingsProps): React.ReactElement {
   }, []);
 
   React.useEffect(() => {
-    const sync = (): void => {
-      const snapshot = scope.getSnapshot();
-      if (snapshot.status === 'ready' && snapshot.value !== undefined) {
-        setDraft(snapshot.value as TemptaskConfig);
-      }
-    };
-    if (typeof scope.load === 'function') void scope.load();
-    sync();
-    const unsubscribe = typeof scope.subscribe === 'function' ? scope.subscribe(sync) : null;
+    // 值的权威来源是 host 的 /state（它给的是「归一化后的生效配置」——空值已经落到平台默认）。
+    // 配置桥只负责「别处改了配置就把我们叫醒」：0.2.0 的官方「设置 → 插件」表单与齿轮
+    // 写的是同一处，所以订阅它能立刻反映出来。
+    if (scope !== undefined && typeof scope.load === 'function') void scope.load();
+    const unsubscribe =
+      scope !== undefined && typeof scope.subscribe === 'function' ? scope.subscribe(() => void pull()) : null;
     void pull();
     return () => {
       if (unsubscribe !== null) unsubscribe();
     };
   }, [scope, pull]);
 
+  React.useEffect(() => {
+    if (state !== null && !edited) setDraft(state.config);
+  }, [state, edited]);
+
   const save = async (): Promise<void> => {
     setBusy(true);
     setNotice(null);
     setError(null);
     try {
-      await scope.set('rootDir', draft.rootDir);
-      await scope.set('autoCleanDays', Number(draft.autoCleanDays) || 0);
+      await writeConfigField(scope, 'rootDir', draft.rootDir);
+      await writeConfigField(scope, 'autoCleanDays', Number(draft.autoCleanDays) || 0);
+      setEdited(false);
       setNotice(runtime.t('saved'));
-      if (typeof scope.load === 'function') void scope.load();
+      await pull();
     } catch (cause) {
       setError(`${runtime.t('saveFailed')}：${String((cause as Error)?.message ?? cause)}`);
     } finally {
@@ -1410,7 +1532,10 @@ function SettingsSection(props: SettingsProps): React.ReactElement {
             className="__tt_input"
             value={draft.rootDir}
             placeholder="<DSH_HOME>/dsh-temptask"
-            onChange={(event) => setDraft({ ...draft, rootDir: event.target.value })}
+            onChange={(event) => {
+              setEdited(true);
+              setDraft({ ...draft, rootDir: event.target.value });
+            }}
           />
         </label>
         <label className="__tt_field">
@@ -1420,13 +1545,15 @@ function SettingsSection(props: SettingsProps): React.ReactElement {
             type="number"
             min={0}
             value={String(draft.autoCleanDays)}
-            onChange={(event) => setDraft({ ...draft, autoCleanDays: Number(event.target.value) || 0 })}
+            onChange={(event) => {
+              setEdited(true);
+              setDraft({ ...draft, autoCleanDays: Number(event.target.value) || 0 });
+            }}
           />
         </label>
         <p className="__tt_hint">{runtime.t('autoCleanHint')}</p>
         <p className="__tt_hint">
-          {runtime.t('configSource')}：
-          {state?.configSource === 'settings' ? runtime.t('settingsManaged') : runtime.t('fileManaged')}
+          {runtime.t('configSource')}：{configSourceLabel(state?.configSource, runtime)}
           {'　·　'}
           {runtime.t('dataFile')}：{state?.dataFile ?? draft.dataDir}
         </p>
@@ -1512,26 +1639,8 @@ const plugin: TemptaskClientPlugin = {
       return dict[key] ?? ZH[key] ?? key;
     };
 
-    /** 打开会话：客户端只认识「已知会话」，刚创建的会话可能晚一拍到达，所以带重试。 */
-    const openSession = (sessionId: string, attempt = 0): void => {
-      const sessions = ctx.get<DshClientSessionsService>('sessions');
-      if (sessions === undefined) {
-        ctx.logger?.warn?.('[dsh-temptask] sessions 服务不可用，无法打开会话');
-        return;
-      }
-      try {
-        sessions.open(sessionId);
-        ctx.get<DshLayoutService>('layout')?.selectPanel('conversation');
-      } catch (error) {
-        if (attempt < 8) {
-          setTimeout(() => openSession(sessionId, attempt + 1), 400);
-          return;
-        }
-        ctx.logger?.warn?.(
-          `[dsh-temptask] 会话 ${sessionId} 尚未出现在会话列表中，请从侧边栏任务节点下打开：${String(error)}`,
-        );
-      }
-    };
+    /** 打开会话（实现见模块级的 createOpenSession）。 */
+    const openSession = createOpenSession(ctx);
 
     const runtime: Runtime = {
       t,
@@ -1542,14 +1651,10 @@ const plugin: TemptaskClientPlugin = {
     const tray = createTray();
 
     /**
-     * settingsScope（由 dsh-client-ui-settings 提供）：齿轮里的「删除策略」与设置卡片共用它。
-     * 取不到时齿轮退回 `/api/config`（host 端的 config.json 降级通道），所以功能不丢。
+     * 配置通道（齿轮里的「删除策略」与设置卡片共用它）：
+     * 0.2.0-rc.1 是 `configForms`，0.1.x 是 `settingsScope`，都没有就走 `/api/config`。
      */
-    const settingsScopeBinder = ctx.get<DshSettingsScopeBinder>('settingsScope');
-    const settingsScope =
-      settingsScopeBinder !== undefined && typeof settingsScopeBinder.bind === 'function'
-        ? settingsScopeBinder.bind({ namespace: NS })
-        : undefined;
+    const settingsScope = resolveConfigScope(ctx);
 
     /**
      * 兜底：面板行的官方 onClick 是 `selectPanel(id)`（键盘激活也只走它）。
@@ -1626,20 +1731,20 @@ const plugin: TemptaskClientPlugin = {
       ),
     );
 
-    // 设置卡片（settingsScope 可用时才注册；缺失则只留齿轮里的精简设置）
-    if (settingsScope !== undefined) {
-      slots.inject('settings.section', () =>
-        slots.register(
-          { name: 'settings.section', id: NS, order: 60, label: () => t('nav'), locale: NS },
-          () =>
-            React.createElement(SettingsSection, {
-              scope: settingsScope,
-              initial: defaultConfigShape(),
-              runtime,
-            }),
-        ),
-      );
-    }
+    // 设置卡片：0.2.0-rc.1 与 0.1.x 都注册。
+    // 配置通道（configForms / settingsScope）拿不到时，卡片自己走插件 HTTP 接口——
+    // host 端会把写入路由到 profile 补丁或 config.json，所以卡片不会因为宿主版本而消失。
+    slots.inject('settings.section', () =>
+      slots.register(
+        { name: 'settings.section', id: NS, order: 60, label: () => t('nav'), locale: NS },
+        () =>
+          React.createElement(SettingsSection, {
+            scope: settingsScope,
+            initial: defaultConfigShape(),
+            runtime,
+          }),
+      ),
+    );
 
     ctx.logger?.info?.('[dsh-temptask] client half mounted');
   },
@@ -1660,6 +1765,12 @@ const plugin: TemptaskClientPlugin = {
     rootAction,
     TemporaryTaskMark,
     TRAY_AUTO_CLOSE_MS,
+    // 宿主接口适配层（离线渲染自测直接打这些函数，不必真的挂进宿主）
+    resolveConfigScope,
+    adaptConfigForm,
+    writeConfigField,
+    configSourceLabel,
+    createOpenSession,
   },
 };
 

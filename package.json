@@ -1,6 +1,6 @@
 {
   "name": "@aeroscis/dsh-temptask",
-  "version": "0.3.3",
+  "version": "0.4.0",
   "description": "DSH 临时任务模式：为 DSH 增加「任务」分组——不绑定任何长期工作空间，自动在任务根目录下创建隔离的临时工作目录并开启会话，即开即用、用完即弃。Temporary task mode for DeepSeek Harness.",
   "type": "module",
   "main": "lib/index.js",
@@ -45,7 +45,7 @@
   },
   "engines": {
     "node": "^22.19.0 || >=24.0.0",
-    "dsh": "^0.1.5-rc.2"
+    "dsh": "^0.1.5-rc.2 || ^0.2.0-rc.1"
   },
   "scripts": {
     "build": "npm run build:host && npm run build:client",
@@ -70,14 +70,12 @@
     }
   },
   "peerDependencies": {
-    "@deepseek-ai/dsh-settings": "^0.1.5-rc.2",
-    "@deepseek-ai/schemastery": "^3.18.1"
+    "@deepseek-ai/dsh": "^0.1.5-rc.2 || ^0.2.0-rc.1",
+    "@deepseek-ai/schemastery": "^3.18.1",
+    "@deepseek-ai/dsh-settings": "^0.1.5-rc.2 || ^0.2.0-rc.1"
   },
   "peerDependenciesMeta": {
     "@deepseek-ai/dsh-settings": {
-      "optional": true
-    },
-    "@deepseek-ai/schemastery": {
       "optional": true
     }
   },

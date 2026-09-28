@@ -19,7 +19,8 @@ import { fileURLToPath } from 'node:url';
 import { createTaskCommand } from './commands.js';
 import {
   SETTINGS_NAMESPACE,
-  buildSettingsSchema,
+  buildLegacySchema,
+  buildPluginConfigFields,
   configFileIn,
   normalizeConfigInput,
   readConfigFile,
@@ -32,13 +33,38 @@ import { API_PREFIX, createRoutes, type RouteHost } from './routes.js';
 import { canOpenPath, messageOf, openPathInFileManager } from './sessions.js';
 import { TaskStoreFile } from './store.js';
 import { TemptaskManager } from './tasks.js';
-import { ERROR_CODES, type ApiResult, type ConfigSource, type TemptaskConfig } from './types.js';
+import {
+  ERROR_CODES,
+  type ApiResult,
+  type ConfigSource,
+  type DeleteSessionPolicy,
+  type TemptaskConfig,
+} from './types.js';
 
 export const name = 'dsh-temptask';
-export const version = '0.3.3';
+export const version = '0.4.0';
 
 /** 不声明硬依赖：所有服务都按可选处理（见文件头说明）。 */
 export const inject: string[] = [];
+
+/**
+ * 插件自己的 Config schema —— DSH 0.2.0-rc.1 起，官方「设置 → 插件」的表单
+ * 就是按各插件条目 Config 里的 volatile 字段投影出来的（`dsh-settings` 的 `volatileForm`），
+ * 而 `ctx.settings.register(namespace, schema)` 那套命名空间注册表在新宿主里已经不存在。
+ *
+ * 因此这里**动态** import schemastery（而不是静态 import）：
+ *   - 新宿主的加载器会把 `@deepseek-ai/schemastery` 解析到运行时自带的那份（3.18.4，有 volatile）；
+ *   - 离线冒烟测试 / 旧宿主上取不到它时，`Config` 为 undefined，插件照常加载并退化成
+ *     「行配置 + config.json」，而不是整个插件加载失败。
+ */
+const schemastery = await import('@deepseek-ai/schemastery')
+  .then((module) => module.default as SchemasteryLike)
+  .catch(() => undefined);
+
+/** 没有 schemastery 时导出 undefined：加载器只把有 schema 的条目视为「可表单配置」。 */
+export const Config =
+  schemastery === undefined ? undefined : schemastery.object(buildPluginConfigFields(schemastery));
+
 
 /** 是否检测到 EAC 桌面版自带的 dsh-side-session（仅提示，不冲突、不禁用）。 */
 export function detectSideSession(): boolean {
@@ -50,8 +76,42 @@ export function detectSideSession(): boolean {
   }
 }
 
-export function apply(ctx: DshContext, config?: Partial<TemptaskConfig>): void {
-  const rowConfig: Partial<TemptaskConfig> = config ?? {};
+/**
+ * 读一个配置字段：DSH 0.2.0-rc.1 起 volatile 字段交到插件手里的是**引用**（`{ get(), … }`），
+ * 0.1.x 宿主与声明了 Config 的旧加载器给的是普通值；两种形态都要能吃下。
+ */
+export function readField(value: unknown): unknown {
+  return value !== null &&
+    typeof value === 'object' &&
+    typeof (value as { get?: unknown }).get === 'function'
+    ? (value as { get(): unknown }).get()
+    : value;
+}
+
+/**
+ * 把行配置拍平成普通对象（引用取当前值）。类型收敛交给 `normalizeConfigInput`，
+ * 这里只负责去掉「引用」这层壳。
+ */
+export function rowConfigNow(raw: unknown): Partial<TemptaskConfig> | undefined {
+  if (raw === null || typeof raw !== 'object') return undefined;
+  const fields = raw as Record<string, unknown>;
+  return {
+    rootDir: readField(fields['rootDir']) as string | undefined,
+    autoCleanDays: readField(fields['autoCleanDays']) as number | undefined,
+    onDeleteSessions: readField(fields['onDeleteSessions']) as DeleteSessionPolicy | undefined,
+    dataDir: readField(fields['dataDir']) as string | undefined,
+  };
+}
+
+/**
+ * @param ctx Cordis 上下文。
+ * @param config 插件行配置：新宿主上是**引用对象**（volatile 字段带 `.get()`），旧宿主上是普通对象。
+ */
+export function apply(ctx: DshContext, config?: unknown): void {
+  /** 行配置原样（0.2.0 上是引用对象）；每次要值时现读，见 `rowConfigNow`。 */
+  const rowInput = config;
+  /** 首帧的行配置快照：只用来定初始配置与初始来源，之后一律现读。 */
+  const initialRowConfig = rowConfigNow(rowInput);
 
   const log = (level: 'info' | 'warn' | 'error', message: string): void => {
     const logger = ctx.logger;
@@ -64,13 +124,30 @@ export function apply(ctx: DshContext, config?: Partial<TemptaskConfig>): void {
     }
   };
 
-  /* ── 配置状态（可变，settings 热更新会改写它） ── */
-  const initialConfig = normalizeConfigInput(rowConfig);
+  /* ── 配置状态（0.2.0 起字段是活引用：值在「读」的那一刻才取） ── */
+  const initialConfig = normalizeConfigInput(initialRowConfig);
   let currentConfig: TemptaskConfig = initialConfig;
-  let currentSource: ConfigSource = config === undefined ? 'defaults' : 'cordis-row';
+  let currentSource: ConfigSource = initialRowConfig === undefined ? 'defaults' : 'cordis-row';
+  /** 旧宿主：`ctx.settings.register` 命名空间作用域（新宿主没有这个 API）。 */
   let settingsScope: DshSettingsScope | undefined;
   let settingsReady = false;
+  /** 旧宿主：config.json 里读到的补丁（settings 不可用时的降级通道）。 */
+  let fileConfig: Partial<TemptaskConfig> | undefined;
   let dataDirNote: string | undefined;
+
+  /**
+   * 生效配置 = 「宿主配置层」叠在行配置上。
+   *
+   * 宿主配置层按宿主能力选择：新宿主用 `configEditor`（官方表单与齿轮面板都写进同一处
+   * profile 补丁，Config 引用会自动跟着变），旧宿主用 settings 命名空间或 config.json。
+   * 行配置每次**现读**：0.2.0 的 volatile 字段是活引用，官方表单改完值就在引用里，
+   * 缓存一份普通对象会让热更新看不见。
+   */
+  function computeConfig(): TemptaskConfig {
+    const row = rowConfigNow(rowInput) ?? {};
+    const host = settingsScopeValue() ?? fileConfig;
+    return normalizeConfigInput(host === undefined ? row : { ...row, ...host });
+  }
 
   /* ── 持久化与业务核心 ── */
   /** 挂载状态：能力探测必须如实反映，UI 据此提示降级。 */
@@ -97,7 +174,12 @@ export function apply(ctx: DshContext, config?: Partial<TemptaskConfig>): void {
     capabilities: () => ({
       sessionController: ctx.get('sessionController') !== undefined,
       agents: ctx.get('agents') !== undefined,
-      settings: settingsReady,
+      /**
+       * 宿主是否托管本插件配置：
+       * 0.1.x = settings 命名空间注册成功；0.2.0-rc.1 起 = 有 configEditor
+       * （插件自己的 Config schema 就是官方「设置 → 插件」表单）。
+       */
+      settings: settingsReady || ctx.get('configEditor') !== undefined,
       webServer: mounted.webServer,
       commands: mounted.commands,
       workspaceRegistry: ctx.get('workspaceRegistry') !== undefined,
@@ -106,7 +188,7 @@ export function apply(ctx: DshContext, config?: Partial<TemptaskConfig>): void {
   });
   storeWarningSink = (message) => manager.recordWarning(message);
 
-  /** 启动流程：先解析配置（settings → config.json → cordis 行），再载入清单。 */
+  /** 启动流程：先解析配置（宿主配置层 → 行配置），再载入清单。 */
   const ready = (async (): Promise<void> => {
     try {
       await loadSettings();
@@ -120,6 +202,8 @@ export function apply(ctx: DshContext, config?: Partial<TemptaskConfig>): void {
         log('warn', `读取 config.json 失败：${messageOf(error)}`);
       }
     }
+    currentConfig = computeConfig();
+    currentSource = resolveSource();
     try {
       await manager.initialize();
       log(
@@ -133,6 +217,36 @@ export function apply(ctx: DshContext, config?: Partial<TemptaskConfig>): void {
       log('error', message);
     }
   })();
+
+  /**
+   * 重新读一遍配置（新宿主上官方设置表单改了 Config 引用就会走这里）。
+   * 根目录变了要重新载入清单——这是「改完设置立刻生效」的关键一步。
+   */
+  const refreshConfig = async (): Promise<void> => {
+    const next = computeConfig();
+    const rootChanged = next.rootDir !== currentConfig.rootDir;
+    if (next.dataDir !== currentConfig.dataDir && dataDirNote === undefined) {
+      dataDirNote = `dataDir 已改为 ${next.dataDir}，需要重启 DSH 才会切换记录文件位置`;
+      log('warn', dataDirNote);
+    }
+    currentConfig = next;
+    currentSource = resolveSource();
+    if (rootChanged) {
+      await manager.initialize();
+      log('info', `配置已更新：根目录 ${next.rootDir}`);
+    }
+  };
+
+  // 热更新通知：0.2.0 的加载器在 volatile 字段值变化后往插件自己的 ctx 上发这个事件。
+  ctx.effect(
+    () =>
+      ctx.on('loader/volatile-update', () => {
+        void ready.then(refreshConfig).catch((error: unknown) => {
+          log('warn', `配置热更新处理失败：${messageOf(error)}`);
+        });
+      }),
+    'dsh-temptask: volatile config',
+  );
 
   /* ── 事件钩子 ── */
   const handlers = createHookHandlers(manager, ready, log);
@@ -159,7 +273,7 @@ export function apply(ctx: DshContext, config?: Partial<TemptaskConfig>): void {
   const routeHost: RouteHost = {
     manager,
     ready,
-    writeLocalConfig,
+    writeLocalConfig: writeConfig,
     /** 打开任务根目录：用官方 `openWorkspacePath`（它接受任意路径）。 */
     openRoot: async () => {
       const path = manager.rootDir();
@@ -201,13 +315,32 @@ export function apply(ctx: DshContext, config?: Partial<TemptaskConfig>): void {
 
   /* ─────────────────────── 内部实现 ─────────────────────── */
 
-  /** 官方 settings 命名空间：可用时它拥有配置，否则回落到 config.json。 */
+  /** settings 命名空间（旧宿主）当前值；没有就是 undefined（此时由行配置/config.json 说话）。 */
+  function settingsScopeValue(): Partial<TemptaskConfig> | undefined {
+    if (settingsScope === undefined) return undefined;
+    const value = settingsScope.get();
+    return value !== null && typeof value === 'object' && !Array.isArray(value)
+      ? (value as Partial<TemptaskConfig>)
+      : undefined;
+  }
+
+  /** 配置来源（UI 据此决定「能不能在齿轮里改」以及把人送去哪里）。 */
+  function resolveSource(): ConfigSource {
+    if (settingsReady) return 'settings';
+    if (fileConfig !== undefined) return 'config-file';
+    // configEditor 在 = 这是个「插件配置写 profile 补丁」的宿主（0.2.0-rc.1 起的形态）：
+    // 官方「设置 → 插件」表单与齿轮面板写的是同一处。
+    if (ctx.get('configEditor') !== undefined) return 'plugin-config';
+    return rowConfigNow(rowInput) === undefined ? 'defaults' : 'cordis-row';
+  }
+
+  /**
+   * 旧宿主的 settings 命名空间（0.2.0-rc.1 已移除这套 API：新宿主用的是
+   * 「插件自己的 Config schema + configEditor」）。探测不到就什么都不做。
+   */
   async function loadSettings(): Promise<void> {
     const settings = ctx.get<DshSettingsService>('settings');
-    if (settings === undefined || typeof settings.register !== 'function') {
-      log('warn', '本宿主未提供 settings 服务，配置走 config.json');
-      return;
-    }
+    if (settings === undefined || typeof settings.register !== 'function') return;
 
     // 两个可选依赖都用动态 import：缺失时只降级，不让整个插件加载失败。
     let settingsNamespace: ((namespace: string) => string) | undefined;
@@ -223,31 +356,18 @@ export function apply(ctx: DshContext, config?: Partial<TemptaskConfig>): void {
     }
     if (settingsNamespace === undefined || z === undefined) return;
 
-    const scope = settings.register(settingsNamespace(SETTINGS_NAMESPACE), buildSettingsSchema(z), {
-      base: rowConfig,
+    const scope = settings.register(settingsNamespace(SETTINGS_NAMESPACE), buildLegacySchema(z), {
+      base: rowConfigNow(rowInput) ?? {},
     });
     settingsScope = scope;
     settingsReady = true;
     currentSource = 'settings';
 
-    const sync = (): void => {
-      const value = scope.get();
-      const record =
-        value !== null && typeof value === 'object' && !Array.isArray(value)
-          ? (value as Partial<TemptaskConfig>)
-          : {};
-      const next = normalizeConfigInput({ ...rowConfig, ...record });
-      if (next.dataDir !== initialConfig.dataDir) {
-        dataDirNote = `dataDir 已改为 ${next.dataDir}，需要重启 DSH 才会切换记录文件位置`;
-        log('warn', dataDirNote);
-      }
-      currentConfig = next;
-      log('info', `配置已更新（settings）：rootDir=${next.rootDir}`);
-    };
-    sync();
     scope.watch(() => {
       try {
-        sync();
+        currentConfig = computeConfig();
+        currentSource = resolveSource();
+        log('info', `配置已更新（settings）：rootDir=${currentConfig.rootDir}`);
       } catch (error) {
         log('warn', `settings 变更处理失败：${messageOf(error)}`);
       }
@@ -260,17 +380,25 @@ export function apply(ctx: DshContext, config?: Partial<TemptaskConfig>): void {
     );
   }
 
-  /** 降级配置：`<pluginDataDir>/config.json`。 */
+  /** 降级配置：`<pluginDataDir>/config.json`（旧宿主没有 settings 时，或新宿主写不动 profile 时）。 */
   async function loadLocalConfig(): Promise<void> {
     const patch = await readConfigFile(configFileIn(initialConfig.dataDir));
     if (patch === undefined) return;
-    currentConfig = normalizeConfigInput({ ...rowConfig, ...patch });
-    currentSource = 'config-file';
-    log('info', `已读取 config.json：rootDir=${currentConfig.rootDir}`);
+    fileConfig = patch;
+    log('info', `已读取 config.json：rootDir=${normalizeConfigInput({ ...(rowConfigNow(rowInput) ?? {}), ...patch }).rootDir}`);
   }
 
-  /** 写入降级配置（settings 可用时拒绝，并告诉用户去哪里改）。 */
-  async function writeLocalConfig(
+  /**
+   * 写入插件配置。
+   *
+   * 三条路，按宿主能力选：
+   *   1. 新宿主：`ctx.configEditor.edit()` —— 写进 profile 的 cordis 补丁，
+   *      与官方「设置 → 插件」表单同一处，改完加载器会把新值灌进 Config 引用并热更新；
+   *   2. 旧宿主的 settings 命名空间：拒绝（并指路）——配置归 settings 文档所有，
+   *      插件自己再写一份会互相覆盖；
+   *   3. 都没有：`<pluginDataDir>/config.json` 降级通道。
+   */
+  async function writeConfig(
     patch: Partial<TemptaskConfig>,
   ): Promise<ApiResult<{ config: TemptaskConfig; note?: string }>> {
     if (settingsReady) {
@@ -281,13 +409,43 @@ export function apply(ctx: DshContext, config?: Partial<TemptaskConfig>): void {
         hint: '请在「设置 → 插件 → 临时任务（dsh-temptask）」中修改，改完立即生效。',
       };
     }
+
+    const editor = ctx.get<DshConfigEditorService>('configEditor');
+    const entry = ctx.fiber?.entry;
+    if (editor !== undefined && typeof editor.edit === 'function' && entry !== undefined) {
+      try {
+        await editor.edit(entry, (current: unknown) => ({
+          ...(current !== null && typeof current === 'object' ? (current as object) : {}),
+          ...patch,
+        }));
+        // 加载器把新值灌进 Config 引用后（必要时会发 volatile-update），这里再同步一次，
+        // 保证紧接着返回给客户端的 config 已经是最新值。
+        await refreshConfig();
+        const result: ApiResult<{ config: TemptaskConfig; note?: string }> = {
+          ok: true,
+          config: currentConfig,
+          ...(dataDirNote === undefined ? {} : { note: dataDirNote }),
+        };
+        log('info', `插件配置已更新：rootDir=${currentConfig.rootDir}`);
+        return result;
+      } catch (error) {
+        return {
+          ok: false,
+          code: ERROR_CODES.fs,
+          message: '写入插件配置失败',
+          hint: messageOf(error),
+        };
+      }
+    }
+
     try {
       const file = configFileIn(initialConfig.dataDir);
       const existing = (await readConfigFile(file)) ?? {};
-      const merged: Partial<TemptaskConfig> = { ...rowConfig, ...existing, ...patch };
+      const merged: Partial<TemptaskConfig> = { ...(rowConfigNow(rowInput) ?? {}), ...existing, ...patch };
       await writeJsonAtomic(file, merged);
-      currentConfig = normalizeConfigInput(merged);
-      currentSource = 'config-file';
+      fileConfig = merged;
+      currentConfig = computeConfig();
+      currentSource = resolveSource();
       await mkdir(currentConfig.rootDir, { recursive: true });
       // 重新载入：新根目录、自动清理与清单位置都可能变化。
       await manager.initialize();
@@ -309,4 +467,4 @@ export function apply(ctx: DshContext, config?: Partial<TemptaskConfig>): void {
   }
 }
 
-export default { name, version, inject, apply };
+export default { name, version, inject, Config, apply };
