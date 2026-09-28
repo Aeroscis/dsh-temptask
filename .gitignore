@@ -3,3 +3,6 @@ build/
 *.tsbuildinfo
 .DS_Store
 *.tgz
+
+# local scratch directories
+_*/
