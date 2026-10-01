@@ -11,7 +11,7 @@
  * 依赖策略：**全部使用可选服务**（`ctx.get` + 缺失即降级），不 declare inject，
  * 这样任一服务缺失时插件仍能加载，并在 UI 里如实显示能力缺失，而不是静默不工作。
  */
-import { existsSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { mkdir } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -42,7 +42,18 @@ import {
 } from './types.js';
 
 export const name = 'dsh-temptask';
-export const version = '0.4.0';
+
+/**
+ * 版本**现读 `package.json`**，不再手写常量（`lib/host.js` → `../package.json`、
+ * `src/host.ts` → `../package.json`，两条路径都落在包根）。
+ *
+ * 理由：手写的版本号一定会漂——0.4.0 就只改了 host 这一处、忘了客户端的字面量，
+ * 于是发布出去的包里两半版本不一致。现在 host 报的永远是"这个包装的是哪一版"，
+ * 而客户端半边由 `scripts/build-client.mjs` 从同一个 `package.json` 注入。
+ */
+export const version = (
+  JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')) as { version: string }
+).version;
 
 /** 不声明硬依赖：所有服务都按可选处理（见文件头说明）。 */
 export const inject: string[] = [];

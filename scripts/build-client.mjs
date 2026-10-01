@@ -7,10 +7,12 @@
  *   window.__ModuleLoader__.load({ id, factory: (require) => exports })
  *
  * 本脚本做且只做这一层确定性包装（与 dshmarket 的 normalize-client-banner 同类）：
- *   1. 删掉 `import React from "react"`，改为工厂内 `require("react")`（react 是平台
+ *   1. 把源码里的版本占位符 `__DSH_PLUGIN_VERSION__` 换成 package.json 的 version
+ *      （客户端半边读不到 package.json，只能在构建期定版；找不到占位符即失败）；
+ *   2. 删掉 `import React from "react"`，改为工厂内 `require("react")`（react 是平台
  *      静态 seed 模块，见 dsh-client-modules 的 resolution branch order）；
- *   2. 把 `export default X` 变成 `var __plugin = X`，工厂末尾 `module.exports = __plugin`；
- *   3. 包上 ModuleLoader 头。
+ *   3. 把 `export default X` 变成 `var __plugin = X`，工厂末尾 `module.exports = __plugin`；
+ *   4. 包上 ModuleLoader 头。
  *
  * **`id` 必须等于 package.json 的 `name`**（不是目录名、也不是短名）。宿主
  * `dsh-client-modules` 用加载器条目名（= 包名）当图行 id，`arrive()` 装载完 combo
@@ -35,6 +37,15 @@ if (typeof PLUGIN_ID !== 'string' || PLUGIN_ID.length === 0) {
   throw new Error('build-client: package.json 里没有可用的 name，无法确定 ModuleLoader 注册 id');
 }
 
+// 客户端半边的版本同样只有一个真相来源：package.json 的 version。
+// 浏览器里读不到 package.json，所以只能在构建期注入——0.4.0 就是手写字面量漂掉的
+// （host 报 0.4.0、界面报 0.3.3），这里替换源码里的占位符来根治。
+const VERSION_PLACEHOLDER = '__DSH_PLUGIN_VERSION__';
+const PLUGIN_VERSION = packageJson.version;
+if (typeof PLUGIN_VERSION !== 'string' || PLUGIN_VERSION.length === 0) {
+  throw new Error('build-client: package.json 里没有可用的 version，无法给客户端半边定版');
+}
+
 /** 把每一行都缩进一层（工厂体内）。 */
 function indent(text, pad) {
   return text
@@ -47,20 +58,28 @@ const source = await readFile(compiledFile, 'utf8');
 
 let body = source;
 
-// 1) react 由 ModuleLoader 工厂注入，不使用 ESM 导入。
+// 1) 版本占位符 → package.json 的 version（客户端半边的定版点）。
+if (!body.includes(VERSION_PLACEHOLDER)) {
+  throw new Error(
+    `build-client: ${compiledFile} 里没有找到 ${VERSION_PLACEHOLDER}（src/client.tsx 的 CLIENT_VERSION），构建契约已变化`,
+  );
+}
+body = body.replaceAll(VERSION_PLACEHOLDER, PLUGIN_VERSION);
+
+// 2) react 由 ModuleLoader 工厂注入，不使用 ESM 导入。
 const reactImport = /^\s*import\s+React\s*(?:,\s*\{[^}]*\})?\s*from\s*["']react["'];?\s*$/mu;
 if (!reactImport.test(body)) {
   throw new Error(`build-client: ${compiledFile} 中没有找到预期的 \`import React from "react"\`，构建契约已变化`);
 }
 body = body.replace(reactImport, '');
 
-// 2) 默认导出 → 局部变量。
+// 3) 默认导出 → 局部变量。
 if (!/^\s*export default\s/mu.test(body)) {
   throw new Error(`build-client: ${compiledFile} 中没有找到 \`export default\`，构建契约已变化`);
 }
 body = body.replace(/^\s*export default\s/mu, 'var __plugin = ');
 
-// 3) 允许 tsc 生成的空 `export {};` 之类，其余 import/export 一律失败。
+// 4) 允许 tsc 生成的空 `export {};` 之类，其余 import/export 一律失败。
 body = body.replace(/^\s*export\s*\{\s*\};?\s*$/mu, '');
 const leftover = body
   .split('\n')
@@ -110,6 +129,19 @@ if (!bundle.includes(banner)) {
   );
 }
 
+// 自检 2：版本必须真的注入进去了——产物里还留着占位符、或找不到本次版本号，
+// 都说明客户端半边没有跟上 package.json（0.4.0 的"两半版本不一致"就是这么来的）。
+if (bundle.includes(VERSION_PLACEHOLDER)) {
+  throw new Error(`build-client: 产物里仍残留 ${VERSION_PLACEHOLDER}，版本注入没有生效`);
+}
+if (!bundle.includes(`'${PLUGIN_VERSION}'`) && !bundle.includes(`"${PLUGIN_VERSION}"`)) {
+  throw new Error(
+    `build-client: 产物里找不到 package.json 的版本 ${PLUGIN_VERSION}，客户端半边会与 host 报的版本对不上`,
+  );
+}
+
 await mkdir(dirname(outFile), { recursive: true });
 await writeFile(outFile, bundle, 'utf8');
-console.log(`build-client: wrote ${outFile} (${bundle.length} bytes, id=${PLUGIN_ID})`);
+console.log(
+  `build-client: wrote ${outFile} (${bundle.length} bytes, id=${PLUGIN_ID}, version=${PLUGIN_VERSION})`,
+);

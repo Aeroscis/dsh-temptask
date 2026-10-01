@@ -90,4 +90,21 @@ check('cordis.patch.yml 真的插入本插件行', () => {
   assert.ok(patch.includes(`name: '${pkg.name}'`) || patch.includes(`name: "${pkg.name}"`), patch);
 });
 
+check('已提交的 client/client.js 是用当前 package.json 的版本构建的', () => {
+  const rel = 'client/client.js';
+  const bundle = readFileSync(join(root, rel), 'utf8');
+  assert.ok(
+    !bundle.includes('__DSH_PLUGIN_VERSION__'),
+    `${rel} 里还留着版本占位符：npm run build:client 没有跑过，或跑失败了`,
+  );
+  const match = /CLIENT_VERSION\s*=\s*['"]([^'"]+)['"]/u.exec(bundle);
+  assert.ok(match !== null, `${rel} 里找不到 CLIENT_VERSION，构建契约已变化`);
+  assert.equal(
+    match[1],
+    pkg.version,
+    `${rel} 里的 CLIENT_VERSION 是 ${match[1]}，package.json 是 ${pkg.version}——` +
+      '这正是 0.4.0「两半版本不一致」告警的成因：发布前先 npm run build:client 并提交产物',
+  );
+});
+
 console.log(`\n✅ 发布形态自检 ${passed} 项通过`);

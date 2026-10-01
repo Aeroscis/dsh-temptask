@@ -625,6 +625,36 @@ check('两半版本不一致能被判出来（说明"界面已更新但后端还
   assert.equal(differ(undefined, '0.2.3'), false, '拿不到后端版本时不做任何断言');
 });
 
+check('客户端半边报的版本与 package.json 一致（构建期注入，不再手写常量）', () => {
+  // 1) 直接对账：产物里被注入的版本必须等于 package.json 的 version。
+  //    失败通常意味着 client/client.js 是旧版本构建出来的产物（跑 npm run build:client）。
+  assert.equal(
+    internals.CLIENT_VERSION,
+    packageJson.version,
+    'client/client.js 里的 CLIENT_VERSION 与 package.json 不一致：产物过期了',
+  );
+
+  // 2) 行为对账：把 package.json 的版本当作 host 版本传进设置卡片，页脚不该出现告警；
+  //    版本不同时必须告警——否则上面那条断言就只是"常量抄对了"，测不出显示逻辑。
+  const panel = internals.TaskSettingsPanel;
+  const renderWith = (pluginVersion) =>
+    render(panel, {
+      runtime,
+      policy: 'archive',
+      pluginVersion,
+      scope: scopeStub,
+      onSaved: () => {},
+      onClose: () => {},
+    });
+
+  const same = renderWith(packageJson.version);
+  assert.ok(same.includes(`v${packageJson.version}`), '页脚应显示 package.json 里的版本');
+  assert.equal(same.includes('⚠️'), false, '两半同版本时页脚不该挂告警');
+
+  const stale = renderWith('0.0.0-stale');
+  assert.ok(stale.includes('⚠️'), '反向对照失败：版本不同时页脚必须挂告警');
+});
+
 check('设置卡片渲染根目录 / 自动清理 / 与 dsh-side-session 的区别', () => {
   const markup = render(entryOf('settings.section').component, {});
   assert.ok(markup.includes('任务根目录'), markup);

@@ -12,13 +12,16 @@
  * 运行：node scripts/smoke.mjs
  */
 import assert from 'node:assert/strict';
-import { existsSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { mkdir, readFile, realpath, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { basename, join } from 'node:path';
 
 import plugin, * as entry from '../lib/index.js';
 import * as configModule from '../lib/config.js';
+
+/** host 半边报的版本必须等于包自己的版本（src/host.ts 现在从 package.json 现读）。 */
+const pkg = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8'));
 
 const workspace = join(tmpdir(), `dsh-temptask-smoke-${Date.now()}`);
 const rootDir = join(workspace, 'root');
@@ -339,7 +342,11 @@ try {
   const initial = await call(routes, `${API}/state`);
   check('GET /state：空清单 + 根目录 + 能力探测（含 workspaceRegistry）', () => {
     assert.equal(initial.ok, true);
-    assert.ok(initial.pluginVersion.length > 0, 'state 应带 host 版本，供 UI 显示"跑的是哪一版"');
+    assert.equal(
+      initial.pluginVersion,
+      pkg.version,
+      'state 应带 host 版本，且必须等于 package.json 的 version（手写常量漂移过一次，现在只有一个真相来源）',
+    );
     assert.equal(initial.capabilities.canOpenPath, true, '宿主能打开文件夹时能力位应为 true');
     assert.equal(initial.tasks.length, 0);
     assert.equal(initial.rootDir, rootDir);

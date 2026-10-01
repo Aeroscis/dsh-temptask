@@ -4,6 +4,36 @@
 
 发布渠道：npm [`@aeroscis/dsh-temptask`](https://www.npmjs.com/package/@aeroscis/dsh-temptask) · 源码 <https://github.com/Aeroscis/dsh-temptask>
 
+## [0.4.1] — 2026-10-01
+
+### 修复
+
+- **「两半版本不一致」是假告警**：0.4.0 只更新了 host 的版本常量，客户端半边的
+  `CLIENT_VERSION` 还停在 `0.3.3`，于是设置卡片与 `?` 气泡一直显示
+  `插件后端 v0.4.0 · 插件界面 v0.3.3 ⚠️`，并提示"重启 DSH 可让两半同时更新"——
+  重启不会好转，因为发布产物里就是那个旧版本号（npm 上 0.4.0 的 `gitHead`
+  正是含 `CLIENT_VERSION = '0.3.3'` 的那次提交）。
+  **功能不受影响**：两半本来就是同一代构建，`halvesDiffer` 只驱动这一行显示，
+  没有任何代码拿它当门槛；但这是一条用户可见的错误信息。
+
+### 变更（防复发）
+
+- **版本号不再手写**：`src/host.ts` 改为运行时从 `package.json` 现读
+  （`lib/host.js` 与 `src/host.ts` 的 `../package.json` 都落在包根）；
+  `src/client.tsx` 改为占位符 `__DSH_PLUGIN_VERSION__`，由 `scripts/build-client.mjs`
+  在包装 ModuleLoader 包时注入 `package.json` 的 `version`——找不到占位符，
+  或注入后产物里仍不含该版本号，都直接构建失败。
+- **新增两道防漂移检查**：`check:pack` 断言已提交的 `client/client.js` 里的
+  `CLIENT_VERSION` 等于 `package.json` 的版本（挂在 `prepack` 上，拦住旧产物被发布）；
+  `smoke:client` 断言两半同版本时**不**告警、异版本时**必须**告警（带反向对照）。
+
+### 验证
+
+- `npm run check` 全绿：typecheck（host + client 双 tsconfig，strict）+ build +
+  发布形态自检 7 项 + host 冒烟 50 项 + client 冒烟 35 项 + 加载器注册契约。
+- 产物核对：`client/client.js` 里的 `CLIENT_VERSION` 与 host 现读的 `package.json`
+  版本同为 `0.4.1`，两半从此不可能对不上。
+
 ## [0.4.0] — 2026-09-28
 
 ### 兼容性（**必须升级**：0.3.3 在 DSH 0.2.0-rc.1 上完全不加载）

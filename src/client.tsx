@@ -39,13 +39,20 @@ const NS = 'dsh-temptask';
 const API = '/dsh-temptask/api';
 
 /**
- * 客户端半边的版本，与 package.json / host.ts 保持一致（发布时一起改）。
+ * 客户端半边的版本 —— **构建期注入，不要手写**。
  *
- * 为什么要单独写一个：host 的版本只能证明 **host** 半边刷新了。
- * 纯客户端改动（比如这一版只调了 UI）host 版本号不变，气泡里并排显示两半，
- * 才能判断"到底是哪半边还是旧的"。
+ * `__DSH_PLUGIN_VERSION__` 是 `scripts/build-client.mjs` 的替换点：包装 ModuleLoader
+ * 包时换成当时的 `package.json` 的 `version`，找不到占位符就直接构建失败。浏览器里
+ * 读不到 `package.json`，所以这一半只能在构建期定版。
+ *
+ * 为什么要单独留一个：host 的版本只能证明 **host** 半边刷新了。纯客户端改动
+ * （比如某一版只调了 UI）host 版本可能不变，气泡里并排显示两半，才能判断
+ * "到底是哪半边还是旧的"。
+ *
+ * 历史：0.4.0 忘了改这里的字面量，发布出去的包里 host 报 `0.4.0`、界面报 `0.3.3`，
+ * 设置卡片与 `?` 气泡一直挂着"两半版本不一致"的告警。改成注入后不可能再漂移。
  */
-const CLIENT_VERSION = '0.3.3';
+const CLIENT_VERSION = '__DSH_PLUGIN_VERSION__';
 
 /**
  * `?` 气泡的"鼠标离开后自动收起"延迟（毫秒）。
@@ -1762,6 +1769,8 @@ const plugin: TemptaskClientPlugin = {
     createTray,
     labelOf,
     halvesDiffer,
+    // 构建期注入的版本：离线自测拿它和 package.json 对账，防止产物是旧版本构建的
+    CLIENT_VERSION,
     rootAction,
     TemporaryTaskMark,
     TRAY_AUTO_CLOSE_MS,
