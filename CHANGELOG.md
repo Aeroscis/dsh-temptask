@@ -4,7 +4,7 @@
 
 发布渠道：npm [`@aeroscis/dsh-temptask`](https://www.npmjs.com/package/@aeroscis/dsh-temptask) · 源码 <https://github.com/Aeroscis/dsh-temptask>
 
-## [0.5.0] — 2026-10-14
+## [0.5.0] — 2026-10-20
 
 ### 兼容性：适配 DSH 0.2.1-rc.2（桌面版 2026-10 中旬那条线）
 
