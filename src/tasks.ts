@@ -12,9 +12,11 @@
 import { existsSync } from 'node:fs';
 import { randomBytes } from 'node:crypto';
 import { mkdir, rm } from 'node:fs/promises';
-import { basename } from 'node:path';
+import { basename, isAbsolute, resolve } from 'node:path';
 
+import { describeSession, type SessionDescription, type TaskDescription } from './describe.js';
 import { isInsideRoot, normalizeRoot, resolveTaskPath, taskDirName, uniqueDirName } from './paths.js';
+import { promoteTask, replayHistoryIntoWorkspace } from './promote.js';
 import {
   attachSessionToWorkspace,
   cancelSession,
@@ -38,6 +40,11 @@ import {
   type DeleteSessionPolicy,
   type ErrorCode,
   type PendingOpen,
+  type PromoteCandidate,
+  type PromoteCandidates,
+  type PromoteRequest,
+  type PromoteResult,
+  type RepairResult,
   type Task,
   type TaskView,
   type TemptaskCapabilities,
@@ -70,6 +77,18 @@ const PENDING_OPEN_TTL_MS = 5 * 60 * 1000;
 /** 同一任务 lastOpenedAt 的落盘节流窗口。 */
 const TOUCH_PERSIST_INTERVAL_MS = 30 * 1000;
 
+/** 转正候选一次最多读多少条会话内容（每条都要打开一份会话日志）。 */
+const CANDIDATE_LIMIT = 30;
+
+/** 会话摘要的缓存有效期：反复开关转正模态不重复读盘，但改了标题也能在 1 分钟内看到。 */
+const DESCRIBE_TTL_MS = 60 * 1000;
+
+/** 摘要缓存的最大条目数（超过就丢掉最旧的一半）。 */
+const DESCRIBE_CACHE_MAX = 200;
+
+/** 每个任务最多打开几条会话日志来找"有内容的那条"（最新那条常常是空的）。 */
+const TASK_SESSION_SCAN_LIMIT = 3;
+
 export interface TaskManagerDeps {
   ctx: DshContext;
   store: TaskStoreFile;
@@ -83,6 +102,8 @@ export interface TaskManagerDeps {
   sideSessionDetected: () => boolean;
   /** 运行期能力探测（六个字段全部如实反映）。 */
   capabilities: () => TemptaskCapabilities;
+  /** 宿主用户目录（「转正」表单的默认父目录；只做 UI 起点，不参与任何判定）。 */
+  home: () => string;
 }
 
 export class TemptaskManager {
@@ -92,6 +113,9 @@ export class TemptaskManager {
 
   /** 每个任务最近一次 lastOpenedAt 落盘时间，避免每条会话事件都写盘。 */
   private readonly touchedAt = new Map<string, number>();
+
+  /** 会话摘要缓存（键 = 会话 id）——见 candidates()。 */
+  private readonly described = new Map<string, { at: number; value: SessionDescription }>();
 
   constructor(private readonly deps: TaskManagerDeps) {}
 
@@ -197,6 +221,7 @@ export class TemptaskManager {
       capabilities: this.deps.capabilities(),
       sideSessionDetected: this.deps.sideSessionDetected(),
       now: Date.now(),
+      home: this.deps.home(),
     };
     if (pending !== undefined) state.pendingOpen = pending;
     return state;
@@ -218,10 +243,16 @@ export class TemptaskManager {
   private toView(task: Task): TaskView {
     const workspace =
       task.workspaceId === undefined ? undefined : getTaskWorkspace(this.deps.ctx, task.workspaceId);
+    // 该任务名下的全部会话：工作区账目是权威，记录里那条只是兜底（工作区被手动删掉时）。
+    const sessionIds = workspace === undefined ? [] : [...workspace.sessionIds];
+    if (task.sessionId !== undefined && !sessionIds.includes(task.sessionId)) {
+      sessionIds.unshift(task.sessionId);
+    }
     const view: TaskView = {
       ...task,
       workspacePresent: workspace !== undefined,
       live: isSessionLive(this.deps.ctx, task.sessionId),
+      sessionIds,
     };
     if (workspace !== undefined) view.title = workspace.title;
     return view;
@@ -421,6 +452,224 @@ export class TemptaskManager {
       `removed task ${id} (dir: ${String(disposed.dirRemoved)}, archived sessions: ${disposed.sessionsArchived}, policy: ${this.deps.config().onDeleteSessions})`,
     );
     return { ok: true, task: this.toView(task), ...disposed };
+  }
+
+  /**
+   * 转正：临时任务 → 正式工作区（搬目录 + 在新家建节点 + 复刻对话）。
+   *
+   * 这里只做两件事——**解析任务**和**在成功后移除记录**；中间那 9 步编排全在 promote.ts，
+   * 因为那部分需要同时面对文件系统、工作区注册表与会话种子，放在业务管理器里会糊成一团。
+   */
+  async promote(request: PromoteRequest): Promise<ApiResult<PromoteResult>> {
+    const key = request.id.trim().length > 0 ? request.id.trim() : request.query;
+    const resolved = this.resolveTask(key);
+    if ('ok' in resolved) return resolved;
+
+    return await promoteTask(
+      {
+        ctx: this.deps.ctx,
+        log: this.deps.log,
+        policy: () => this.deps.config().onDeleteSessions,
+        home: this.deps.home,
+        forget: async (taskId) => {
+          await this.deps.store.mutate((draft) => {
+            draft.tasks = draft.tasks.filter((row) => row.id !== taskId);
+          });
+          this.touchedAt.delete(taskId);
+        },
+      },
+      this.toView(resolved.task),
+      request,
+    ).then((result) => {
+      // 「完成后打开新会话」由管理器统一登记 pendingOpen —— 与 /temptask new|open 走同一条通道，
+      // 客户端就不必为转正再学一种跳转方式。
+      if (result.ok && request.open && result.sessionId !== undefined) {
+        this.requestOpen(result.task.id, result.sessionId);
+      }
+      return result;
+    });
+  }
+
+  /**
+   * 转正候选：任务列表 + 每个任务的**会话标题 / 首条消息摘要**。
+   *
+   * 为什么单独开一条接口、而不是塞进 `/state`：读标题与摘要要逐条打开会话日志
+   * （`sessionQuery.observeSession`），而 `/state` 是 2.5 秒轮询的热路径——放进去等于每
+   * 2.5 秒把所有日志读一遍。这里只在转正模态打开时调一次，并且：
+   *   - 最多读 `CANDIDATE_LIMIT` 条，其余如实报告 `skipped`；
+   *   - 结果按会话 id 缓存 `DESCRIBE_TTL_MS`，反复开关模态不重复读盘；
+   *   - 任何一条读失败都只让它自己退回时间戳，不影响整张列表，也不影响转正本身。
+   */
+  async candidates(options: { limit?: number } = {}): Promise<ApiResult<PromoteCandidates>> {
+    const limit =
+      typeof options.limit === 'number' && Number.isFinite(options.limit)
+        ? Math.max(1, Math.min(50, Math.trunc(options.limit)))
+        : CANDIDATE_LIMIT;
+    const views = this.listSorted();
+    const sliced = views.slice(0, limit);
+    const describeSessions = this.deps.ctx.get('sessionQuery') !== undefined;
+
+    const tasks = await Promise.all(
+      sliced.map(async (view): Promise<PromoteCandidate> => {
+        const described = describeSessions ? await this.describeTask(view) : { scanned: 0 };
+        const candidate: PromoteCandidate = { ...view, sessionCount: view.sessionIds.length };
+        if (described.title !== undefined) candidate.sessionTitle = described.title;
+        if (described.preview !== undefined) candidate.preview = described.preview;
+        if (described.sessionId !== undefined) candidate.describedSessionId = described.sessionId;
+        return candidate;
+      }),
+    );
+
+    return { ok: true, tasks, skipped: Math.max(0, views.length - sliced.length), describeSessions };
+  }
+
+  /**
+   * 给一个任务挑出"有内容"的那条会话并读它的标题/摘要。
+   *
+   * 顺序很重要：`sessionIds` 是"新→旧"（host 组装时把最近一条放最前），而**最新那条常常是空的**
+   * ——本插件每次 `/temptask open` 都会在同一个目录里新开一条会话。所以这里按
+   * 「第一条有标题 → 否则第一条有摘要 → 否则什么都没有」来挑（见 describe.ts 的说明）。
+   * 每条会话的读取结果都进 `describeCached` 的 TTL 缓存，反复开模态不重复读盘。
+   */
+  private async describeTask(view: TaskView): Promise<TaskDescription> {
+    const ids =
+      view.sessionIds.length > 0
+        ? view.sessionIds
+        : view.sessionId === undefined
+          ? []
+          : [view.sessionId];
+    const sliced = ids.slice(0, TASK_SESSION_SCAN_LIMIT);
+
+    let withPreview: TaskDescription | undefined;
+    let scanned = 0;
+    for (const sessionId of sliced) {
+      const described = await this.describeCached(sessionId);
+      scanned += 1;
+      if (described.title !== undefined) return { ...described, sessionId, scanned };
+      if (withPreview === undefined && described.preview !== undefined) {
+        withPreview = { ...described, sessionId, scanned };
+      }
+    }
+    return withPreview === undefined ? { scanned } : { ...withPreview, scanned };
+  }
+
+  /** 带 TTL 的会话摘要缓存（键 = 会话 id）。 */
+  private async describeCached(sessionId: string | undefined): Promise<SessionDescription> {
+    if (sessionId === undefined || sessionId.length === 0) return {};
+    const hit = this.described.get(sessionId);
+    const now = Date.now();
+    if (hit !== undefined && now - hit.at < DESCRIBE_TTL_MS) return hit.value;
+    const value = await describeSession(this.deps.ctx, sessionId);
+    this.described.set(sessionId, { at: now, value });
+    // 缓存不无限长：超过上限时丢掉最旧的一批（按键里记的时间戳排序，不依赖插入顺序）。
+    if (this.described.size > DESCRIBE_CACHE_MAX) {
+      const oldest = [...this.described.entries()]
+        .sort((left, right) => left[1].at - right[1].at)
+        .slice(0, DESCRIBE_CACHE_MAX / 2);
+      for (const [key] of oldest) this.described.delete(key);
+    }
+    return value;
+  }
+
+  /**
+   * 修复：把一个**已经存在**的工作区与它的「孤儿」临时会话接上（只读旧日志，复刻成新会话）。
+   *
+   * 为什么需要它：早期转正只认任务记录里的**最后一条**会话，而本插件每次 `/temptask open`
+   * 都会在同一个任务目录里新开一条会话——于是"最后一条是空会话"的任务会转正成功但历史没带
+   * 过去（用户实测 `dsh-docs-official` 就是这样：最后一条 0KB、真对话在更早那条 146KB 的会话里）。
+   * 旧会话日志仍在磁盘上，所以可以事后补：找 `header.cwd` 落在任务根目录下、但目录已经不存在的
+   * 会话（= 被转正搬走的那些），交给和转正同一条复刻路径。
+   *
+   * @param targetPath 目标工作区的绝对路径（必须已经登记为工作区）。
+   */
+  async repair(targetPath: string, sourceSessionId?: string): Promise<ApiResult<RepairResult>> {
+    const { ctx } = this.deps;
+    const registry = ctx.get<DshWorkspaceRegistryService>('workspaceRegistry');
+    if (registry === undefined) {
+      return failure(ERROR_CODES.noWorkspace, '当前宿主未提供 workspaceRegistry，无法按路径找节点');
+    }
+    const trimmed = targetPath.trim();
+    if (trimmed.length === 0 || !isAbsolute(trimmed)) {
+      return failure(ERROR_CODES.badRequest, '请填写工作区的绝对路径', '例如 D:\\Flora\\ProgramProjects\\my-project');
+    }
+    let workspace: DshWorkspaceEntity | undefined;
+    try {
+      workspace = await registry.resolveByPath(resolve(trimmed));
+    } catch (error) {
+      return failure(ERROR_CODES.fs, `按路径查工作区失败：${trimmed}`, messageOf(error));
+    }
+    if (workspace === undefined) {
+      return failure(
+        ERROR_CODES.notFound,
+        `这个路径不是已登记的工作区：${trimmed}`,
+        '先把该目录添加为工作区（侧边栏「添加工作区」），再重试。',
+      );
+    }
+
+    const query = ctx.get<DshSessionQueryService>('sessionQuery');
+    if (query === undefined || typeof query.listSessions !== 'function') {
+      return failure(ERROR_CODES.noSession, '当前宿主未提供 sessionQuery.listSessions，读不到孤儿会话');
+    }
+
+    let records: Awaited<ReturnType<DshSessionQueryService['listSessions']>>;
+    try {
+      records = await query.listSessions();
+    } catch (error) {
+      return failure(ERROR_CODES.fs, '列出会话失败', messageOf(error));
+    }
+
+    const root = this.rootDir();
+    // 显式给了来源会话就只用它；否则把"孤儿"按创建时间从新到旧排，逐条试（空的会被跳过）。
+    const pinned = sourceSessionId?.trim();
+    const orphaned =
+      pinned !== undefined && pinned.length > 0
+        ? [{ id: pinned, cwd: '', createdAt: 0 }]
+        : records
+            .map((record) => record.header)
+            .filter(
+              (header): header is { id: string; cwd: string; createdAt?: number } =>
+                typeof header.id === 'string' &&
+                header.id.length > 0 &&
+                typeof header.cwd === 'string' &&
+                header.cwd.length > 0 &&
+                // 「孤儿」= cwd 在任务根目录下，但那个目录已经不存在（被转正搬走/被手工删掉）。
+                isInsideRoot(root, header.cwd) &&
+                !existsSync(header.cwd),
+            )
+            .sort((left, right) => (right.createdAt ?? 0) - (left.createdAt ?? 0));
+
+    if (orphaned.length === 0) {
+      return failure(
+        ERROR_CODES.notFound,
+        `没有找到孤儿会话（cwd 在 ${root} 下、但目录已不存在）`,
+        '如果那次转正本来就没有可继承的已完成回合，说明不用修复。',
+      );
+    }
+
+    const outcome = await replayHistoryIntoWorkspace(
+      { ctx, log: this.deps.log },
+      orphaned.map((header) => header.id),
+      workspace.path,
+      workspace.id,
+    );
+
+    const result: RepairResult = {
+      workspaceId: workspace.id,
+      workspacePath: workspace.path,
+      carried: outcome.carried,
+      candidates: orphaned.length,
+    };
+    if (outcome.sessionId !== undefined) result.sessionId = outcome.sessionId;
+    if (outcome.sourceSessionId !== undefined) result.sourceSessionId = outcome.sourceSessionId;
+    if (outcome.sourceTitle !== undefined) result.sourceTitle = outcome.sourceTitle;
+    if (outcome.reason !== undefined) result.reason = outcome.reason;
+
+    this.deps.log(
+      'info',
+      `repaired ${workspace.path} ← ${outcome.sourceSessionId ?? '-'} ` +
+        `(carried: ${String(outcome.carried)}, orphans: ${orphaned.length})`,
+    );
+    return { ok: true, ...result };
   }
 
   /** 清理任务：每条都走同一条 dispose 路径，所以手动删除/自动清理不会再有行为差。 */

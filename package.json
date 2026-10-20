@@ -1,7 +1,7 @@
 {
   "name": "@aeroscis/dsh-temptask",
-  "version": "0.4.1",
-  "description": "DSH 临时任务模式：为 DSH 增加「任务」分组——不绑定任何长期工作空间，自动在任务根目录下创建隔离的临时工作目录并开启会话，即开即用、用完即弃。Temporary task mode for DeepSeek Harness.",
+  "version": "0.5.0",
+  "description": "DSH 临时任务模式：为 DSH 增加「任务」分组——不绑定任何长期工作空间，自动在任务根目录下创建隔离的临时工作目录并开启会话，即开即用、用完即弃；喜欢的任务可以「转正」：改名、搬到正式目录、连对话一起带过去。Temporary task mode for DeepSeek Harness.",
   "type": "module",
   "main": "lib/index.js",
   "exports": {
@@ -19,6 +19,7 @@
     "tsconfig.json",
     "tsconfig.client.json",
     "README.md",
+    "docs",
     "LICENSE"
   ],
   "keywords": [
@@ -59,7 +60,8 @@
     "smoke:host": "node scripts/smoke.mjs",
     "smoke:client": "node scripts/smoke-client.mjs",
     "check:registration": "node scripts/check-registration.mjs",
-    "check": "npm run typecheck && npm run build && npm run check:pack && npm run smoke && npm run check:registration"
+    "check:seed-parity": "node scripts/check-seed-parity.mjs",
+    "check": "npm run typecheck && npm run build && npm run check:pack && npm run smoke && npm run check:registration && npm run check:seed-parity"
   },
   "dsh": {
     "bundle": {

@@ -47,8 +47,14 @@ export function parseArgs(input: string): string[] {
   return args;
 }
 
-function formatTime(value: number | undefined): string {
-  if (value === undefined) return '—';
+/** 拼一个**展示用**的目标路径（只出现在命令回执里，不参与真正的路径运算）。 */
+function joinPath(parent: string, name: string): string {
+  if (parent.endsWith('\\') || parent.endsWith('/')) return `${parent}${name}`;
+  const separator = parent.includes('\\') && !parent.includes('/') ? '\\' : '/';
+  return `${parent}${separator}${name}`;
+}
+
+function formatTime(value: number | undefined): string {  if (value === undefined) return '—';
   const date = new Date(value);
   const pad = (n: number): string => String(n).padStart(2, '0');
   return (
@@ -95,7 +101,7 @@ export function createTaskCommand(deps: TaskCommandDeps): DshCommandDefinition {
   return {
     name: 'temptask',
     description: '临时任务：在 DSH 自己的目录里开一个隔离的临时工作区+会话（目录名=时间戳，不用起名）',
-    input: { hint: '[list | new | open <ID|目录名|标题> | clean [ID|目录名|标题] [--all] [--yes] | help]' },
+    input: { hint: '[list | new | open <ID|目录名|标题> | promote <任务> --dir <父目录> [--name <新名>] [--yes] | clean [ID|目录名|标题] [--all] [--yes] | help]' },
     async handler(invocation) {
       try {
         await ready;
@@ -122,6 +128,12 @@ export function createTaskCommand(deps: TaskCommandDeps): DshCommandDefinition {
         return createText();
       case 'open':
         return openText(rest.join(' '));
+      case 'promote':
+      case 'upgrade':
+        return promoteText(rest);
+      case 'repair':
+      case 'fix':
+        return repairText(rest);
       case 'clean':
       case 'rm':
       case 'delete':
@@ -134,8 +146,46 @@ export function createTaskCommand(deps: TaskCommandDeps): DshCommandDefinition {
     }
   }
 
-  function listText(): string {
-    const tasks = manager.listSorted();
+  /**
+   * 修复（命令通道）：把某个已存在的工作区，与它那些「孤儿」临时会话接上。
+   *
+   * 为什么要它：早期转正只认任务记录里的最后一条会话，而本插件每次 `/temptask open` 都会新开
+   * 一条会话——"最后一条是空会话"的任务就会转正成功但历史没带过去。旧日志还在磁盘上，这里补一次。
+   * 自动挑候选：`cwd` 在任务根目录下、但目录已经不存在的会话，按创建时间从新到旧逐条试，
+   * 用第一条有"已完成回合"的。
+   */
+  async function repairText(args: string[]): Promise<DshCommandResult> {
+    const positional = args.filter((arg) => !arg.startsWith('-'));
+    // 第一个位置参数是工作区路径；若给了第二个，就是显式指定的来源会话 id（有多个孤儿可选时用）。
+    const explicitSession = positional.length > 1 ? positional.pop() : undefined;
+    const target = positional.join(' ').trim();
+    if (target.length === 0) {
+      return {
+        kind: 'error',
+        text:
+          '用法：/temptask repair <工作区绝对路径> [来源会话ID]\n' +
+          '  例：/temptask repair D:\\Flora\\ProgramProjects\\dsh-docs-official\n' +
+          '  作用：把该工作区与它的孤儿临时会话接上（只读旧日志，复刻成一条带历史的新会话）。\n' +
+          '  有多个孤儿会话时会按创建时间从新到旧试、跳过没有完整回合的；结果里会告诉你用了哪条。',
+      };
+    }
+    const result = await manager.repair(target, explicitSession);
+    if (!result.ok) return { kind: 'error', text: renderError(result) };
+    return {
+      kind: 'success',
+      text: result.carried
+        ? `🛠 已修复：${result.workspacePath}\n` +
+          `   历史来自 ${result.sourceSessionId ?? '（未返回）'}` +
+          `${result.sourceTitle === undefined ? '' : `（标题：${result.sourceTitle}）`}\n` +
+          `   候选 ${result.candidates} 条（空的已跳过）\n` +
+          `   新会话：${result.sessionId ?? '（未返回）'}——打开它就能看到原来的对话；旧会话仍留在磁盘上。\n` +
+          `   工作区里原来那条空会话可以自己归档。`
+        : `⚠️ 没带上历史：${result.reason ?? '未知原因'}\n` +
+          `   找到 ${result.candidates} 条孤儿会话，但都没有「已完成的一轮对话」可继承。`,
+    };
+  }
+
+  function listText(): string {    const tasks = manager.listSorted();
     const root = manager.rootDir();
     const warnings = manager.getWarnings();
     const warn = warnings.length > 0 ? `\n\n⚠️ ${warnings.join('\n⚠️ ')}` : '';
@@ -182,6 +232,99 @@ export function createTaskCommand(deps: TaskCommandDeps): DshCommandDefinition {
     };
   }
 
+  /**
+   * 转正（命令通道）。命令里没有对话框，所以三个决策全用开关表达：
+   *   `--dir <父目录>`（必填）、`--name <新名>`（缺省用原目录名）、`--no-history`（不带对话）。
+   * 与 clean 一样：不带 `--yes` 只打印「将要做什么」，带上才执行——这就是命令通道上的二次确认。
+   */
+  async function promoteText(args: string[]): Promise<DshCommandResult> {
+    const confirmed = args.some((arg) => arg === '--yes' || arg === '-y');
+    const carry = !args.some((arg) => arg === '--no-history' || arg === '--no-carry');
+
+    const flagValue = (name: string): string | undefined => {
+      const index = args.indexOf(name);
+      if (index >= 0) return args[index + 1];
+      const inline = args.find((arg) => arg.startsWith(`${name}=`));
+      return inline === undefined ? undefined : inline.slice(name.length + 1);
+    };
+    const parentDir = flagValue('--dir') ?? flagValue('--to') ?? '';
+    const name = flagValue('--name') ?? '';
+
+    // 位置参数 = 任务 ID / 目录名 / 标题片段（去掉所有开关与其取值）。
+    const valueIndexes = new Set<number>();
+    for (const flag of ['--dir', '--to', '--name']) {
+      const index = args.indexOf(flag);
+      if (index >= 0) {
+        valueIndexes.add(index);
+        valueIndexes.add(index + 1);
+      }
+    }
+    const query = args
+      .filter((arg, index) => !valueIndexes.has(index) && !arg.startsWith('-'))
+      .join(' ')
+      .trim();
+
+    if (query.length === 0 || parentDir.trim().length === 0) {
+      return {
+        kind: 'error',
+        text:
+          '用法：/temptask promote <ID|目录名|标题> --dir <目标父目录> [--name <新名>] [--no-history] [--yes]\n' +
+          '  不带 --yes 时只预览；--name 缺省时沿用原目录名（时间戳）。',
+      };
+    }
+
+    const resolved = manager.resolve(query);
+    if ('ok' in resolved) return { kind: 'error', text: renderError(resolved) };
+    const view = manager.listSorted().find((row) => row.id === resolved.task.id);
+    const label = view === undefined ? resolved.task.dirName : labelOf(view);
+    const parent = parentDir.trim();
+    const target = name.trim().length > 0 ? name.trim() : resolved.task.dirName;
+    const destination = joinPath(parent, target);
+
+    if (!confirmed) {
+      return {
+        kind: 'success',
+        text:
+          `⚠️ 转正预览（${label}）\n` +
+          `   目录：${resolved.task.path}\n` +
+          `     →   ${destination}\n` +
+          `   对话：${carry ? '复刻到新工作区的会话里（旧会话归档）' : '不带过去（旧会话归档）'}\n\n` +
+          `确认请重新执行并加上 --yes：\n  /temptask promote "${query}" --dir "${parent}"${
+            name.trim().length > 0 ? ` --name "${target}"` : ''
+          }${carry ? '' : ' --no-history'} --yes`,
+      };
+    }
+
+    const result = await manager.promote({
+      id: resolved.task.id,
+      query: '',
+      name: target,
+      parentDir: parentDir.trim(),
+      carry,
+      open: true,
+    });
+    if (!result.ok) return { kind: 'error', text: renderError(result) };
+
+    const history = result.historyCarried
+      ? `已把对话复刻进新会话：${result.sessionId ?? '（未返回 id）'}`
+      : `未带上旧对话${result.historyReason === undefined ? '' : `（${result.historyReason}）`}`;
+    return {
+      kind: 'success',
+      text:
+        `🎉 已转正：${labelOf(result.task)} → ${result.to}\n` +
+        `   目录搬移：${result.moved === 'rename' ? '原地重命名' : '跨卷复制 + 删除'}\n` +
+        `   新节点：${result.workspaceId}（标题 = 新目录名）\n` +
+        `   ${history}\n` +
+        `   旧会话：${
+          manager.deleteSessionPolicy === 'archive'
+            ? `已归档 ${result.sessionsArchived} 条（日志仍在磁盘）`
+            : '按当前设置留在「未分组」'
+        }${result.sessionsCanceled > 0 ? `；中止了 ${result.sessionsCanceled} 条会话的当轮` : ''}\n` +
+        `   该任务已从临时任务清单移除，不会再被自动清理。`,
+    };
+  }
+
+  /** 清理任务：每条都走同一条 dispose 路径，所以手动删除/自动清理不会再有行为差。 */
   async function cleanText(args: string[]): Promise<DshCommandResult> {
     const all = args.some((arg) => arg === '--all' || arg === '-a');
     const confirmed = args.some((arg) => arg === '--yes' || arg === '-y');
@@ -246,6 +389,10 @@ export function createTaskCommand(deps: TaskCommandDeps): DshCommandDefinition {
       '  /temptask list                       列出全部任务（ID / 目录 / 节点 / 状态 / 时间）',
       '  /temptask new                        新建任务并打开会话（目录名=时间戳，节点名就是它）',
       '  /temptask open <ID|目录名|标题>      打开任务；支持片段匹配，多个匹配会提示消歧',
+      '  /temptask promote <任务> --dir <父目录> [--name <新名>] [--no-history] [--yes]',
+      '                                       转正：目录搬到新位置 + 建正式工作区 + 把对话复刻进新会话',
+      '                                       不带 --yes 只预览；--name 缺省沿用原目录名（时间戳）',
+      '  /temptask repair <工作区路径>        修复：把已存在的工作区与它的孤儿临时会话接上（补回历史）',
       '  /temptask clean <ID|目录名|标题>     删除任务目录与节点（先预览，加 --yes 才执行）',
       '  /temptask clean --all --yes          删除全部任务',
       '  /temptask help                       显示本帮助',

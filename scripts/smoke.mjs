@@ -19,6 +19,8 @@ import { basename, join } from 'node:path';
 
 import plugin, * as entry from '../lib/index.js';
 import * as configModule from '../lib/config.js';
+import * as describeModule from '../lib/describe.js';
+import * as seedModule from '../lib/seed.js';
 
 /** host 半边报的版本必须等于包自己的版本（src/host.ts 现在从 package.json 现读）。 */
 const pkg = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8'));
@@ -52,6 +54,18 @@ function newState(overrides = {}) {
     titleCalls: [],
     editorEdits: [],
     editorApplied: [],
+    /** 「转正」用：agents.create 收到的全部参数（复刻会话走这条官方路径）。 */
+    agentCreates: [],
+    /** 会话 id → 事件流（sessionQuery.observeSession 的数据源）。 */
+    sessionEvents: new Map(),
+    /** 会话 id → 它当前的 Agent 预设（官方 fork 用它给子会话选预设）。 */
+    sessionPresets: new Map(),
+    /** 会话 id → DSH 折叠出来的标题（`/candidates` 用它在列表里认人）。 */
+    sessionTitles: new Map(),
+    /** 会话 id → 创建顺序（让 `listSessions` 的 createdAt 排序可预测；修复用例要用）。 */
+    sessionOrder: new Map(),
+    /** agentPresets.mount 的调用记录（证明复刻会话真的装配了预设）。 */
+    presetMounts: [],
     ...overrides,
   };
 }
@@ -165,6 +179,7 @@ function createStubContext(state) {
       const sessionId = `session-smoke-${tag}-${state.sessionCalls.length}`;
       state.liveSessions.add(sessionId);
       state.sessionCwd.set(sessionId, request.cwd);
+      state.sessionOrder.set(sessionId, state.sessionOrder.size + 1);
       return { sessionId };
     },
     async cancel(request) {
@@ -190,6 +205,78 @@ function createStubContext(state) {
   const sessions = {
     get: (id) => (state.liveSessions.has(id) ? { id } : undefined),
     list: () => [...state.liveSessions].map((id) => ({ id })),
+  };
+
+  /**
+   * 桩 `sessionQuery`（只读历史）。
+   *
+   * 「转正」要用它读来源会话的事件流来造 fork 种子，所以这里必须复刻真实语义：
+   * 找不到会话要抛错（真实现是 `SESSION_QUERY_SESSION_NOT_FOUND`），
+   * 默认投影里带 `agentPreset`（真实现：`observation.projections.values.agentPreset`）。
+   */
+  const sessionQuery = {
+    async observeSession(sessionId) {
+      const events = state.sessionEvents.get(sessionId);
+      if (events === undefined) throw new Error(`session "${sessionId}" not found`);
+      const cwd = state.sessionCwd.get(sessionId);
+      const preset = state.sessionPresets.get(sessionId);
+      const title = state.sessionTitles.get(sessionId);
+      return {
+        header: { id: sessionId, ...(cwd === undefined ? {} : { cwd }) },
+        events,
+        inheritedEventCount: 0,
+        // 真实现的默认投影里同时有 agentPreset 与 title（`dsh-session-title` 注册的 `title` 投影）。
+        projections: {
+          values: {
+            ...(preset === undefined ? {} : { agentPreset: preset }),
+            ...(title === undefined ? {} : { title }),
+          },
+        },
+      };
+    },
+    /** 真实现列出「含冷会话」的全部记录；桩从 sessionCwd 反推，createdAt 用创建顺序。 */
+    async listSessions() {
+      return [...state.sessionCwd.entries()].map(([id, cwd]) => ({
+        header: { id, cwd, createdAt: state.sessionOrder.get(id) ?? 0 },
+      }));
+    },
+  };
+
+  /**
+   * 桩 `agents`（agent 工厂）。
+   *
+   * 与真实现的两条关键语义一致：
+   *   1. 会话的 header.cwd 来自 `meta.cwd`（`attachSession` 就是拿它校验的）；
+   *   2. 建出来的会话立刻是 live 的。
+   */
+  const agents = {
+    async create(options) {
+      state.agentCreates.push(options);
+      const cwd = options?.meta?.cwd;
+      if (typeof cwd === 'string') state.sessionCwd.set(options.sessionId, cwd);
+      // 真实现会在发布 agent 之前调用 setup（官方用它 mount 预设）；桩必须跟着调，
+      // 否则「复刻出来的会话其实没装配预设」这种事故就抓不到。
+      if (typeof options?.setup === 'function') {
+        await options.setup({ get: () => undefined }, { id: options.sessionId });
+      }
+      state.liveSessions.add(options.sessionId);
+      state.sessionOrder.set(options.sessionId, state.sessionOrder.size + 1);
+      return { agent: { id: options.sessionId } };
+    },
+    get: (id) => (state.liveSessions.has(id) ? { id } : undefined),
+  };
+
+  const agentPresets = {
+    async resolve(presetId) {
+      return { id: presetId ?? 'smoke-default-preset' };
+    },
+    async mount(agentCtx, presetId) {
+      state.presetMounts.push(presetId);
+    },
+  };
+
+  const agentDefaultModel = {
+    currentSelection: () => ({ provider: 'deepseek', model: 'smoke-model' }),
   };
 
   const workspaceRegistry = createWorkspaceRegistry(state);
@@ -250,6 +337,14 @@ function createStubContext(state) {
           return state.noWorkspaceRegistry === true ? undefined : workspaceRegistry;
         case 'sessionTitle':
           return sessionTitle;
+        case 'sessionQuery':
+          return state.noSessionQuery === true ? undefined : sessionQuery;
+        case 'agents':
+          return agents;
+        case 'agentPresets':
+          return state.noAgentPresets === true ? undefined : agentPresets;
+        case 'agentDefaultModel':
+          return agentDefaultModel;
         case 'configEditor':
           return configEditor;
         case 'connection':
@@ -1014,8 +1109,513 @@ try {
     assert.equal(Object.hasOwn(entry, 'Config'), true, 'lib/index.js 必须再导出 Config');
   });
 
-  console.log(`\n✅ 全部 ${passed} 项通过`);
+  /* ─────────────── 转正：seed 纯函数（官方 fork 语义的守门人） ─────────────── */
 
+  check('seed：空日志 / 只有半轮 → 没有可继承的边界', () => {
+    assert.equal(seedModule.buildSeed([]), undefined);
+    assert.equal(seedModule.buildSeed([{ type: 'turn/start', seq: 0, time: 1 }]), undefined);
+    assert.equal(seedModule.completedPrefixBoundary([]), undefined);
+  });
+
+  check('seed：一整轮 → 前缀 + session/end-seed，inheritedEventCount = 前缀长度', () => {
+    const events = [
+      { type: 'turn/start', seq: 0, time: 10 },
+      { type: 'assistant/message', seq: 1, time: 11 },
+      { type: 'turn/end', seq: 2, time: 12 },
+    ];
+    const built = seedModule.buildSeed(events);
+    assert.ok(built !== undefined);
+    assert.equal(built.inheritedEventCount, 3);
+    assert.equal(built.seed.length, 4, '三条前缀 + 一条 end-seed');
+    assert.equal(built.seed[3].type, 'session/end-seed');
+    assert.equal(built.seed[3].seq, 3, 'end-seed 的 seq 紧接边界之后');
+    assert.equal(built.seed[3].time, 12, '时间戳复用边界事件，不发明"未来时间"');
+    assert.deepEqual(built.seed[3].data, { inherited: true });
+    assert.equal(built.seed[0].type, 'turn/start', '前缀原样保留');
+  });
+
+  check('seed：边界之后只吞「不开新回合」的事件（对齐官方 latestCompletedPrefixBoundary）', () => {
+    const tail = seedModule.buildSeed([
+      { type: 'turn/start', seq: 0, time: 1 },
+      { type: 'turn/end', seq: 1, time: 2 },
+      { type: 'session/title', seq: 2, time: 3 },
+      { type: 'tool/result', seq: 3, time: 4 },
+    ]);
+    assert.equal(tail?.inheritedEventCount, 4, '收尾之后的杂项事件仍属已完成前缀');
+
+    const nextTurn = seedModule.buildSeed([
+      { type: 'turn/start', seq: 0, time: 1 },
+      { type: 'turn/end', seq: 1, time: 2 },
+      { type: 'turn/start', seq: 2, time: 3 },
+    ]);
+    assert.equal(nextTurn?.inheritedEventCount, 2, '新回合一旦开始就不再往前缀里吞');
+
+    const nextUser = seedModule.buildSeed([
+      { type: 'turn/start', seq: 0, time: 1 },
+      { type: 'turn/end', seq: 1, time: 2 },
+      { type: 'user/message', seq: 2, time: 3, surfaceOp: 'append' },
+    ]);
+    assert.equal(nextUser?.inheritedEventCount, 2, '用户又说话 = 边界');
+
+    const spliced = seedModule.buildSeed([
+      { type: 'turn/start', seq: 0, time: 1 },
+      { type: 'turn/end', seq: 1, time: 2 },
+      { type: 'agent/inbox/spliced', seq: 2, time: 3 },
+    ]);
+    assert.equal(spliced?.inheritedEventCount, 2, '收件箱被改写 = 边界');
+  });
+
+  check('seed：seq 与下标不一致 → 拒绝造种子（不猜，交给降级链）', () => {
+    assert.equal(
+      seedModule.buildSeed([
+        { type: 'turn/start', seq: 5, time: 1 },
+        { type: 'turn/end', seq: 6, time: 2 },
+      ]),
+      undefined,
+    );
+  });
+
+  /* ─────────────── 转正：端到端 ─────────────── */
+  // 独立作用域：这一节的变量名（first/second…）与前面的流程重名，包起来互不干扰。
+  {
+
+  const promoteRoot = join(workspace, 'promote-root');
+  const formalDir = join(workspace, 'formal');
+  await mkdir(formalDir, { recursive: true });
+  const formalReal = await realpath(formalDir);
+
+  const prState = newState();
+  const pr = createStubContext(prState);
+  plugin.apply(pr.ctx, {
+    rootDir: promoteRoot,
+    dataDir: join(workspace, 'promote-data'),
+    autoCleanDays: 0,
+    onDeleteSessions: 'archive',
+  });
+  const prCmd = () => pr.commands.get('temptask');
+
+  const first = await call(pr.routes, `${API}/create`, 'POST', {});
+  // 给这条会话造一段「已收尾」的历史，并让它结束：转正要在已完成的一轮对话上做边界。
+  prState.sessionEvents.set(first.sessionId, [
+    { type: 'turn/start', seq: 0, time: 10, data: { turn: 't1' } },
+    { type: 'assistant/message', seq: 1, time: 11, data: {} },
+    { type: 'turn/end', seq: 2, time: 12, data: { turn: 't1' } },
+  ]);
+  prState.sessionPresets.set(first.sessionId, 'preset-smoke');
+  disposeSession(pr, prState, first.sessionId);
+
+  const noConfirm = await call(pr.routes, `${API}/promote`, 'POST', {
+    id: first.task.id,
+    name: 'my-project',
+    parentDir: formalDir,
+  });
+  check('POST /promote 缺 confirm → CONFIRM_REQUIRED（一个字节都没动）', () => {
+    assert.equal(noConfirm.ok, false);
+    assert.equal(noConfirm.code, 'CONFIRM_REQUIRED');
+    assert.ok(existsSync(first.task.path), '预览阶段不得真搬目录');
+  });
+
+  /* 校验矩阵：全部必须在「搬目录」之前被拦住，所以原目录必须毫发无损 */
+  await writeFile(join(workspace, 'not-a-dir.txt'), 'x', 'utf8');
+  await mkdir(join(formalDir, 'taken'), { recursive: true });
+  const badName = await call(pr.routes, `${API}/promote`, 'POST', {
+    id: first.task.id,
+    name: 'nested/name',
+    parentDir: formalDir,
+    confirm: true,
+  });
+  const taken = await call(pr.routes, `${API}/promote`, 'POST', {
+    id: first.task.id,
+    name: 'taken',
+    parentDir: formalDir,
+    confirm: true,
+  });
+  const fileParent = await call(pr.routes, `${API}/promote`, 'POST', {
+    id: first.task.id,
+    name: 'whatever',
+    parentDir: join(workspace, 'not-a-dir.txt'),
+    confirm: true,
+  });
+  const insideRoot = await call(pr.routes, `${API}/promote`, 'POST', {
+    id: first.task.id,
+    name: 'sneaky',
+    parentDir: promoteRoot,
+    confirm: true,
+  });
+  const emptyParent = await call(pr.routes, `${API}/promote`, 'POST', {
+    id: first.task.id,
+    name: 'whatever',
+    parentDir: '',
+    confirm: true,
+  });
+  const missingParentDir = join(workspace, 'does-not-exist-yet');
+  const missingParent = await call(pr.routes, `${API}/promote`, 'POST', {
+    id: first.task.id,
+    name: 'whatever',
+    parentDir: missingParentDir,
+    confirm: true,
+  });
+  check('转正校验：非法名字 / 目标已存在 / 父目录是文件 / 父目录不存在 / 落在任务根目录内 / 父目录为空', () => {
+    assert.equal(badName.code, 'BAD_REQUEST');
+    assert.equal(taken.code, 'TARGET_EXISTS');
+    assert.equal(fileParent.code, 'BAD_REQUEST');
+    assert.equal(insideRoot.code, 'BAD_REQUEST');
+    assert.ok(
+      String(insideRoot.hint).includes(promoteRoot),
+      '落在任务根目录里必须解释清楚为什么不行（那会被当成临时任务重新登记）',
+    );
+    assert.equal(emptyParent.code, 'BAD_REQUEST');
+    assert.equal(missingParent.code, 'BAD_REQUEST');
+    assert.ok(
+      String(missingParent.message).includes('不存在'),
+      '父目录不存在要明说，而不是替用户造一个（少写一层是最常见的手误）',
+    );
+    assert.equal(existsSync(missingParentDir), false, '绝不能顺手把父目录建出来');
+    for (const row of [badName, taken, fileParent, insideRoot, emptyParent, missingParent]) {
+      assert.equal(row.ok, false);
+    }
+    assert.ok(existsSync(first.task.path), '任何校验失败都不许动原目录');
+    assert.equal(prState.agentCreates.length, 0, '校验阶段不该建任何会话');
+    assert.ok(!existsSync(join(formalDir, 'sneaky')), '不许在任务根目录里留下目标目录');
+  });
+
+  const promotesBefore = prState.agentCreates.length;
+  const promoted = await call(pr.routes, `${API}/promote`, 'POST', {
+    id: first.task.id,
+    name: 'my-project',
+    parentDir: formalDir,
+    carry: true,
+    open: true,
+    confirm: true,
+  });
+  const promotedPath = join(formalReal, 'my-project');
+  const seeded = prState.agentCreates[prState.agentCreates.length - 1];
+  const prView = await call(pr.routes, `${API}/state`);
+  check('转正成功：目录搬到新家，原目录消失（rename，不是复制）', () => {
+    assert.equal(promoted.ok, true, JSON.stringify(promoted));
+    assert.equal(promoted.moved, 'rename');
+    assert.equal(promoted.from, first.task.path);
+    assert.equal(promoted.to, promotedPath);
+    assert.ok(existsSync(promotedPath), '新目录应存在');
+    assert.ok(!existsSync(first.task.path), '原目录应已被搬走');
+    assert.ok(existsSync(promoteRoot), '任务根目录本身不能被动');
+  });
+
+  check('转正成功：新节点 = 新目录名（标题就是目录 basename），旧节点被移除', () => {
+    const list = pr.workspaceRegistry.list();
+    assert.equal(list.length, 1, '旧节点必须删掉，否则侧边栏会留一个指向空路径的死节点');
+    assert.equal(list[0].path, promotedPath);
+    assert.equal(list[0].title, 'my-project', '标题 = 新目录名（DSH 对工作区的默认语义）');
+    assert.equal(promoted.workspaceId, list[0].id);
+    assert.equal(pr.workspaceRegistry.get(first.workspaceId), undefined);
+  });
+
+  check('转正成功：用官方 fork 种子把对话复刻进新 cwd 下的新会话', () => {
+    assert.equal(prState.agentCreates.length, promotesBefore + 1, '应当恰好建一条会话');
+    assert.equal(promoted.historyCarried, true);
+    assert.equal(seeded.sessionId, promoted.sessionId);
+    assert.equal(seeded.meta.cwd, promotedPath, '新会话的 cwd 必须是新家（不是旧路径）');
+    assert.equal(seeded.meta.parentSession, first.sessionId, '父会话指回旧的，留下血缘');
+    assert.equal(seeded.meta.isSeeded, true);
+    assert.equal(seeded.meta.agentPreset, 'preset-smoke', '预设跟着来源会话走');
+    assert.deepEqual(seeded.agentOptions, { provider: 'deepseek', model: 'smoke-model' });
+    assert.equal(seeded.inheritedEventCount, 3);
+    assert.equal(seeded.seed.length, 4);
+    assert.equal(seeded.seed[3].type, 'session/end-seed');
+    assert.deepEqual(prState.presetMounts, ['preset-smoke'], '预设必须真的 mount，否则会话没有工具');
+    const attached = prState.attached[prState.attached.length - 1];
+    assert.deepEqual(attached, { workspaceId: promoted.workspaceId, sessionId: seeded.sessionId });
+  });
+
+  check('转正成功：旧会话归档、任务记录移除、pendingOpen 指向新会话', () => {
+    assert.deepEqual(prState.archived, [first.sessionId], '旧会话按现有策略归档（不是丢进未分组）');
+    assert.equal(promoted.sessionsArchived, 1);
+    assert.equal(promoted.sessionsCanceled, 0, '这条会话早已 disposed');
+    assert.equal(prView.tasks.length, 0, '任务记录应被移除：它不再是临时任务，也不会被自动清理');
+    assert.equal(prView.pendingOpen.sessionId, seeded.sessionId, 'open:true 时前端应切到新会话');
+  });
+
+  /* 不带历史：走官方 sessionController（无种子） */
+  const second = await call(pr.routes, `${API}/create`, 'POST', {});
+  const secondView = await call(pr.routes, `${API}/state`);
+  const sessionCallsBefore = prState.sessionCalls.length;
+  const createsBefore = prState.agentCreates.length;
+  const plain = await call(pr.routes, `${API}/promote`, 'POST', {
+    id: second.task.id,
+    name: 'plain-move',
+    parentDir: formalDir,
+    carry: false,
+    open: false,
+    confirm: true,
+  });
+  check('carry=false：只搬目录，新会话走官方 sessionController（不碰种子）', () => {
+    assert.equal(plain.ok, true, JSON.stringify(plain));
+    assert.equal(plain.historyCarried, false);
+    assert.equal(prState.agentCreates.length, createsBefore, '不该走 agents.create');
+    assert.equal(prState.sessionCalls.length, sessionCallsBefore + 1);
+    assert.equal(
+      prState.sessionCalls[prState.sessionCalls.length - 1].cwd,
+      join(formalReal, 'plain-move'),
+      '新会话的 cwd 必须是新家',
+    );
+    assert.equal(prState.canceled.includes(second.sessionId), true, '活着的会话先中止当轮再搬');
+    assert.equal(plain.sessionsCanceled, 1);
+  });
+  check('/state 带 sessionIds：客户端据此把「转正」挂到正确的会话行上', () => {
+    const row = secondView.tasks.find((task) => task.id === second.task.id);
+    assert.deepEqual(row.sessionIds, [second.sessionId]);
+  });
+
+  /* 降级链：读不到历史（sessionQuery 抛错）与没有已完成回合，都不能阻断转正 */
+  const third = await call(pr.routes, `${API}/create`, 'POST', {});
+  const degraded = await call(pr.routes, `${API}/promote`, 'POST', {
+    id: third.task.id,
+    name: 'no-history',
+    parentDir: formalDir,
+    carry: true,
+    open: false,
+    confirm: true,
+  });
+  check('读不到来源事件流 → 降级成「不带历史的新会话」，转正照常完成', () => {
+    assert.equal(degraded.ok, true, JSON.stringify(degraded));
+    assert.equal(degraded.historyCarried, false);
+    // 新实现的措辞：逐条试过候选会话，都造不出种子（读不到/没完成回合），并如实说明。
+    assert.ok(
+      String(degraded.historyReason).includes('可继承'),
+      degraded.historyReason,
+    );
+    assert.ok(typeof degraded.sessionId === 'string' && degraded.sessionId.length > 0);
+    assert.ok(existsSync(join(formalReal, 'no-history')));
+  });
+
+  const fourth = await call(pr.routes, `${API}/create`, 'POST', {});
+  prState.sessionEvents.set(fourth.sessionId, [{ type: 'turn/start', seq: 0, time: 1 }]);
+  const noTurn = await call(pr.routes, `${API}/promote`, 'POST', {
+    id: fourth.task.id,
+    name: 'half-turn',
+    parentDir: formalDir,
+    carry: true,
+    open: false,
+    confirm: true,
+  });
+  check('没有「已完成的一轮」→ 降级并如实说明原因（不假装搬了历史）', () => {
+    assert.equal(noTurn.ok, true, JSON.stringify(noTurn));
+    assert.equal(noTurn.historyCarried, false);
+    assert.ok(String(noTurn.historyReason).includes('已完成'), noTurn.historyReason);
+    assert.ok(existsSync(join(formalReal, 'half-turn')));
+  });
+
+  /* 命令通道：先预览后执行（命令没有对话框，--yes 就是二次确认） */
+  const fifth = await call(pr.routes, `${API}/create`, 'POST', {});
+  const cmdPreview = await prCmd().handler({
+    agent: { id: 'a' },
+    rawInput: `promote "${fifth.task.id}" --dir "${formalDir}" --name from-command`,
+  });
+  const cmdPreviewKeptDir = existsSync(fifth.task.path);
+  const cmdRun = await prCmd().handler({
+    agent: { id: 'a' },
+    rawInput: `promote "${fifth.task.id}" --dir "${formalDir}" --name from-command --yes`,
+  });
+  const afterCmd = await call(pr.routes, `${API}/state`);
+  check('/temptask promote：不带 --yes 只预览（目录不动），带 --yes 才执行', () => {
+    assert.equal(cmdPreview.kind, 'success');
+    assert.ok(cmdPreview.text.includes('转正预览'), cmdPreview.text);
+    assert.ok(cmdPreview.text.includes(join(formalReal, 'from-command').replace(formalReal, formalDir)), cmdPreview.text);
+    assert.ok(cmdPreview.text.includes('--yes'), cmdPreview.text);
+    assert.equal(cmdPreviewKeptDir, true, '预览不得搬目录');
+    assert.equal(cmdRun.kind, 'success', cmdRun.text);
+    assert.ok(cmdRun.text.includes('已转正'), cmdRun.text);
+    assert.ok(existsSync(join(formalReal, 'from-command')));
+    assert.equal(afterCmd.tasks.length, 0, '命令转正后任务记录同样被移除');
+  });
+
+  }
+
+  /* ─────────────── 转正候选：会话标题 / 首条消息摘要（"认不出是哪个对话"的解法） ─────────────── */
+
+  check('describe 纯函数：标题取官方投影、摘要跳过空消息、超长截断', () => {
+    assert.equal(describeModule.projectedTitle({ values: { title: '修复登录 bug' } }), '修复登录 bug');
+    assert.equal(describeModule.projectedTitle({ values: { title: null } }), undefined);
+    assert.equal(describeModule.projectedTitle({ values: {} }), undefined);
+    assert.equal(describeModule.projectedTitle(undefined), undefined);
+
+    const events = [
+      { type: 'user/message', seq: 0, time: 1, data: { content: [{ type: 'image' }] } },
+      {
+        type: 'user/message',
+        seq: 1,
+        time: 2,
+        data: { content: [{ type: 'text', text: '  第一条\n有内容  ' }] },
+      },
+    ];
+    assert.equal(describeModule.firstUserExcerpt(events), '第一条 有内容', '空白要压平、空消息要跳过');
+    assert.equal(
+      describeModule.firstUserExcerpt([{ type: 'turn/start', seq: 0, time: 1 }]),
+      undefined,
+      '没有用户消息时不给摘要',
+    );
+    const long = 'x'.repeat(300);
+    const excerpt = describeModule.firstUserExcerpt(
+      [{ type: 'user/message', seq: 0, time: 1, data: { content: [{ type: 'text', text: long }] } }],
+      20,
+    );
+    assert.equal(excerpt.length, 20);
+    assert.ok(excerpt.endsWith('…'), excerpt);
+  });
+
+  {
+    const candState = newState();
+    const cand = createStubContext(candState);
+    plugin.apply(cand.ctx, {
+      rootDir: join(workspace, 'cand-root'),
+      dataDir: join(workspace, 'cand-data'),
+      autoCleanDays: 0,
+    });
+
+    const first = await call(cand.routes, `${API}/create`, 'POST', {});
+    const second = await call(cand.routes, `${API}/create`, 'POST', {});
+    candState.sessionTitles.set(first.sessionId, '修复登录 bug');
+    candState.sessionEvents.set(first.sessionId, [
+      {
+        type: 'user/message',
+        seq: 0,
+        time: 1,
+        data: { content: [{ type: 'text', text: '  帮我修一下登录页的 500  \n\n 谢谢 ' }] },
+      },
+    ]);
+    candState.sessionEvents.set(second.sessionId, [
+      { type: 'user/message', seq: 0, time: 1, data: { content: [{ type: 'image' }] } },
+      {
+        type: 'user/message',
+        seq: 1,
+        time: 2,
+        data: { content: [{ type: 'text', text: '第二个任务的真实内容' }] },
+      },
+    ]);
+
+    const candidates = await call(cand.routes, `${API}/candidates`, 'POST', {});
+    const byId = new Map((candidates.tasks ?? []).map((task) => [task.id, task]));
+    check('POST /candidates：每条任务都带上会话标题与首条消息摘要', () => {
+      assert.equal(candidates.ok, true, JSON.stringify(candidates));
+      assert.equal(candidates.describeSessions, true);
+      assert.equal(candidates.tasks.length, 2);
+      const withTitle = byId.get(first.task.id);
+      assert.equal(withTitle.sessionTitle, '修复登录 bug');
+      assert.equal(withTitle.preview, '帮我修一下登录页的 500 谢谢');
+      assert.equal(withTitle.sessionCount, 1);
+      const noTitle = byId.get(second.task.id);
+      assert.equal(noTitle.sessionTitle, undefined, '没有标题时不能编一个');
+      assert.equal(noTitle.preview, '第二个任务的真实内容', '图片消息要跳过，取第一条有文字的消息');
+      assert.equal(noTitle.workspacePresent, true);
+    });
+
+    const limited = await call(cand.routes, `${API}/candidates`, 'POST', { limit: 1 });
+    check('/candidates 有上限：只读前 N 条，其余如实报告 skipped', () => {
+      assert.equal(limited.ok, true);
+      assert.equal(limited.tasks.length, 1);
+      assert.equal(limited.skipped, 1);
+    });
+
+    /*
+     * 用户实测过的那种情况：任务记录里的"最后一条会话"是**空的**（本插件每次 open 都会在同一个
+     * 任务目录里新开一条），真对话躺在同一个任务更早的会话里。这时必须拿更早那条来认人。
+     */
+    const third = await call(cand.routes, `${API}/create`, 'POST', {});
+    disposeSession(cand, candState, third.sessionId);
+    const reopened = await call(cand.routes, `${API}/open`, 'POST', { id: third.task.id });
+    candState.sessionTitles.set(third.sessionId, '我听说 dsh 的仓库里事无巨细');
+    candState.sessionEvents.set(third.sessionId, [
+      {
+        type: 'user/message',
+        seq: 0,
+        time: 1,
+        data: { content: [{ type: 'text', text: '我听说 dsh 的仓库里事无巨细' }] },
+      },
+    ]);
+    const scanned = await call(cand.routes, `${API}/candidates`, 'POST', {});
+    const picked = scanned.tasks.find((task) => task.id === third.task.id);
+    check('候选列表：最新那条会话是空的时候，用同一任务里更早的会话认人', () => {
+      assert.equal(picked.sessionId, reopened.sessionId, '记录里最后一条就是那条空会话');
+      assert.equal(picked.sessionCount, 2);
+      assert.equal(
+        picked.sessionTitle,
+        '我听说 dsh 的仓库里事无巨细',
+        '不能只看 task.sessionId——用户真对话在更早那条会话里',
+      );
+      assert.equal(picked.describedSessionId, third.sessionId, '要说清信息取自哪条会话');
+    });
+
+    candState.noSessionQuery = true;
+    const degraded = await call(cand.routes, `${API}/candidates`, 'POST', {});
+    check('宿主没有 sessionQuery → describeSessions=false，列表照常给（只能显示时间戳）', () => {
+      assert.equal(degraded.ok, true);
+      assert.equal(degraded.describeSessions, false);
+      assert.equal(degraded.tasks.length, 3, '前面已经建了三个任务');
+      for (const task of degraded.tasks) {
+        assert.equal(task.sessionTitle, undefined);
+        assert.equal(task.preview, undefined);
+        assert.ok(typeof task.dirName === 'string' && task.dirName.length > 0);
+      }
+    });
+  }
+
+  /* ─── 转正：任务记录里最后一条会话是空的时，要用更早那条有内容的 ─── */
+  {
+    const emptyState = newState();
+    const empty = createStubContext(emptyState);
+    plugin.apply(empty.ctx, {
+      rootDir: join(workspace, 'empty-root'),
+      dataDir: join(workspace, 'empty-data'),
+      autoCleanDays: 0,
+    });
+    const target = await call(empty.routes, `${API}/create`, 'POST', {});
+    // 第一条会话：有内容、有完成回合、有标题
+    emptyState.sessionEvents.set(target.sessionId, [
+      { type: 'user/message', seq: 0, time: 1, data: { content: [{ type: 'text', text: '真实对话' }] } },
+      { type: 'turn/start', seq: 1, time: 2, data: { turn: 't1' } },
+      { type: 'turn/end', seq: 2, time: 3, data: { turn: 't1' } },
+    ]);
+    emptyState.sessionTitles.set(target.sessionId, '老对话');
+    disposeSession(empty, emptyState, target.sessionId);
+    // 再 open 一次 → 任务记录里的"最后一条"变成一条空会话
+    const reopened = await call(empty.routes, `${API}/open`, 'POST', { id: target.task.id });
+    const before = emptyState.agentCreates.length;
+    await mkdir(join(workspace, 'empty-formal'), { recursive: true });
+    const promoted = await call(empty.routes, `${API}/promote`, 'POST', {
+      id: target.task.id,
+      name: 'kept-history',
+      parentDir: join(workspace, 'empty-formal'),
+      carry: true,
+      open: false,
+      confirm: true,
+    });
+    const seeded = emptyState.agentCreates[emptyState.agentCreates.length - 1];
+    check('转正：最后一条会话是空的 → 自动改用同任务里更早那条有内容的当种子', () => {
+      assert.equal(promoted.ok, true, JSON.stringify(promoted));
+      assert.equal(promoted.historyCarried, true, '不能因为最后一条是空会话就放弃历史');
+      assert.equal(emptyState.agentCreates.length, before + 1);
+      assert.equal(seeded.meta.parentSession, target.sessionId, '种子来源必须是有内容的那条');
+      assert.ok(seeded.inheritedEventCount >= 2, String(seeded.inheritedEventCount));
+      assert.equal(promoted.sessionId, seeded.sessionId);
+      assert.notEqual(reopened.sessionId, seeded.meta.parentSession);
+    });
+
+    const repaired = await empty.commands
+      .get('temptask')
+      .handler({ agent: { id: 'a' }, rawInput: `repair "${join(workspace, 'empty-formal', 'kept-history')}"` });
+    check('/temptask repair：给已存在的工作区补回孤儿会话的历史', () => {
+      assert.equal(repaired.kind, 'success', repaired.text);
+      assert.ok(repaired.text.includes('已修复'), repaired.text);
+      assert.ok(repaired.text.includes('标题：老对话'), repaired.text);
+      const ws = empty.workspaceRegistry
+        .list()
+        .find((row) => row.path.endsWith('kept-history'));
+      assert.ok(ws !== undefined, '修复后工作区仍在');
+      assert.ok(ws.sessionIds.length >= 2, `修复后应有至少 2 条会话，实际 ${ws.sessionIds.length}`);
+    });
+  }
+
+  console.log(`\n✅ 全部 ${passed} 项通过`);
 } finally {
   await rm(workspace, { recursive: true, force: true }).catch(() => {});
 }

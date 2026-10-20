@@ -148,11 +148,83 @@ interface DshSessionControllerService {
 
 /** `ctx.agents` — agent 注册表与工厂（sessionController 不可用时的降级路径）。 */
 interface DshAgentsService {
+  /**
+   * 建一条会话（可选带种子）。
+   *
+   * 字段来自官方 `CreateAgentOptions`（`dsh-tool-cordis` 的 api-catalog）：
+   * 只有 `sessionId` 必填，其余都是可选的；`seed` / `inheritedEventCount` / `meta.isSeeded` /
+   * `meta.parentSession` 正是官方 `sessionController.fork()` 用的那几项——本插件的「转正」
+   * 走同一条路，只把 `meta.cwd` 指向新家（fork 自己会填来源会话的旧 cwd）。
+   */
   create(options: {
     sessionId: string;
-    meta?: { cwd?: string; agentPreset?: string };
+    meta?: {
+      cwd?: string;
+      parentSession?: string;
+      isSeeded?: boolean;
+      agentPreset?: string;
+    };
+    seed?: readonly Record<string, unknown>[];
+    inheritedEventCount?: number;
+    agentOptions?: { provider: string; model: string };
+    /**
+     * Agent 发布前的装配回调。官方会用 `ctx.agentPresets.mount(ctx, presetId)` 当它，
+     * 缺了这个回调的会话拿不到预设里的工具/技能——所以能探测到 agentPresets 时必须传。
+     */
+    setup?: (agentCtx: unknown, agent: unknown) => void | Promise<void>;
   }): Promise<{ agent: { readonly id: string } }>;
   get(id: string): unknown;
+}
+
+/**
+ * `ctx.sessionQuery` — 会话历史的只读查询面。
+ * 本插件只用它读「来源会话的事件流」，用来造 fork 种子（不写、不改任何东西）。
+ */
+interface DshSessionObservation {
+  readonly header: { readonly id?: string; readonly cwd?: string };
+  /** 完整事件前缀（含继承来的部分），每条都带 `seq`。 */
+  readonly events: readonly Record<string, unknown>[];
+  readonly inheritedEventCount?: number;
+  /** 默认投影模式下才有；`agentPreset` 是这条会话当前生效的预设。 */
+  /**
+   * 默认投影模式下才有。`agentPreset` 是这条会话当前生效的预设；
+   * `title` 是官方 `dsh-session-title` 折叠出的标题视图（`titleProjectionDefinition`，key 为 `title`，
+   * 还没生成过标题时是 null）——转正候选列表用它认人。
+   */
+  readonly projections?: {
+    readonly values: { readonly agentPreset?: string; readonly title?: string | null };
+  };
+}
+interface DshSessionQueryService {
+  observeSession(sessionId: string, options?: { projectionMode?: string }): Promise<DshSessionObservation>;
+  /**
+   * 列出全部会话记录（含只在持久化里、没加载进内存的冷会话）。
+   * 「修复」用它找**孤儿会话**：`header.cwd` 在任务根目录下、但那个目录已经不存在了
+   * （典型来源：转正时搬走的临时目录）。
+   */
+  listSessions(signal?: AbortSignal): Promise<
+    readonly {
+      readonly header: {
+        readonly id?: string;
+        readonly cwd?: string;
+        readonly createdAt?: number;
+      };
+    }[]
+  >;
+}
+
+/**
+ * `ctx.agentPresets` — Agent 预设注册表。
+ * 官方建会话时用它解析预设并 `mount` 出 `setup`；转正复刻会话要走同一套装配。
+ */
+interface DshAgentPresetsService {
+  resolve(presetId?: string): Promise<{ id: string }>;
+  mount(agentCtx: unknown, presetId: string): Promise<void> | void;
+}
+
+/** `ctx.agentDefaultModel` — 官方建会话时给的 `agentOptions` 就来自这里。 */
+interface DshAgentDefaultModelService {
+  currentSelection(): { provider: string; model: string };
 }
 
 /** `ctx.sessions` — host 侧会话存储。 */

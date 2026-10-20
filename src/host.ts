@@ -13,6 +13,7 @@
  */
 import { existsSync, readFileSync } from 'node:fs';
 import { mkdir } from 'node:fs/promises';
+import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -196,6 +197,7 @@ export function apply(ctx: DshContext, config?: unknown): void {
       workspaceRegistry: ctx.get('workspaceRegistry') !== undefined,
       canOpenPath: canOpenPath(ctx),
     }),
+    home: homedir,
   });
   storeWarningSink = (message) => manager.recordWarning(message);
 
