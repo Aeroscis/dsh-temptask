@@ -55,7 +55,7 @@ export interface TemptaskConfig {
   dataDir: string;
   /**
    * 删除任务（含自动清理）时对它的会话做什么：
-   *   - `archive`（默认）：逐条归档 → 从侧边栏消失（日志仍在磁盘；DSH 没有反归档入口）
+   *   - `archive`（默认）：逐条归档 → 从侧边栏隐藏（日志仍在磁盘；DSH 0.1.7-rc.2 起可取消归档）
    *   - `keep`：什么都不做 → 会话落到官方的「未分组」桶里
    */
   onDeleteSessions: DeleteSessionPolicy;

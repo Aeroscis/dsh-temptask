@@ -6,3 +6,5 @@ build/
 
 # local scratch directories
 _*/
+
+.dsh/

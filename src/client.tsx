@@ -115,7 +115,7 @@ const ZH: Record<string, string> = {
   moreSettings: '更多设置 → 设置 → 插件 → 临时任务',
   cleanTitle: '清理临时任务',
   cleanBodyArchive:
-    '删除会同时移除任务目录、侧边栏节点与记录（不可恢复）。它的会话会被【归档】——从侧边栏消失；日志仍在磁盘上，但 DSH 没有反归档入口：',
+    '删除会同时移除任务目录、侧边栏节点与记录（不可恢复）。它的会话会被【归档】——默认从侧边栏隐藏、日志仍留在磁盘上；要放回来：侧栏「视图选项 → 全部对话（显示已归档）」，再在会话上右键「取消归档」（DSH 0.1.7-rc.2 起）：',
   cleanBodyKeep:
     '删除会同时移除任务目录、侧边栏节点与记录（不可恢复）。按当前设置，它的会话会【留在「未分组」】（想改成归档：齿轮 → 设置）：',
   liveTag: '运行中',
@@ -123,7 +123,7 @@ const ZH: Record<string, string> = {
   policy: '删除任务时',
   policyArchive: '归档会话（推荐）',
   policyKeep: '留在未分组',
-  policyArchiveHint: '从侧边栏消失；日志仍在磁盘上（DSH 没有反归档入口）。',
+  policyArchiveHint: '从侧边栏隐藏；日志仍在磁盘上，可在「视图选项 → 全部对话（显示已归档）」里取消归档（DSH 0.1.7-rc.2 起）。',
   policyKeepHint: 'DSH 原生行为：会话掉进官方的「未分组」桶，需要你自己收拾。',
   settingsTitle: '临时任务设置',
   settingsSaved: '已保存',
@@ -234,7 +234,7 @@ const EN: Record<string, string> = {
   moreSettings: 'More settings → Settings → Plugins → Temporary tasks',
   cleanTitle: 'Clean up temporary tasks',
   cleanBodyArchive:
-    'This removes the task directory, its sidebar node and its record (irreversible). Its sessions are ARCHIVED — they leave the sidebar; logs stay on disk, and DSH has no un-archive entry:',
+    'This removes the task directory, its sidebar node and its record (irreversible). Its sessions are ARCHIVED — hidden from the sidebar by default, logs stay on disk. To bring one back: view options → "All conversations (show archived)", then right-click the session → "Unarchive" (DSH 0.1.7-rc.2 and later):',
   cleanBodyKeep:
     'This removes the task directory, its sidebar node and its record (irreversible). With the current setting, its sessions STAY under "Ungrouped" (switch to archiving via the gear → settings):',
   liveTag: 'running',
@@ -242,7 +242,7 @@ const EN: Record<string, string> = {
   policy: 'When deleting a task',
   policyArchive: 'Archive its sessions (recommended)',
   policyKeep: 'Leave them ungrouped',
-  policyArchiveHint: 'Leaves the sidebar; logs stay on disk (DSH has no un-archive entry).',
+  policyArchiveHint: 'Hidden from the sidebar; logs stay on disk and can be restored via "All conversations (show archived)" (DSH 0.1.7-rc.2 and later).',
   policyKeepHint: 'DSH-native: sessions land in the shipped "Ungrouped" bucket for you to tidy up.',
   settingsTitle: 'Temporary task settings',
   settingsSaved: 'Saved',

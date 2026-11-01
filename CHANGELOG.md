@@ -4,6 +4,23 @@
 
 发布渠道：npm [`@aeroscis/dsh-temptask`](https://www.npmjs.com/package/@aeroscis/dsh-temptask) · 源码 <https://github.com/Aeroscis/dsh-temptask>
 
+## [未发布]
+
+### 修正：关于「取消归档」与「删除会话」的说法
+
+- **更正一处错误说法**：此前 README、设置项文案与清理确认框都写着「DSH 没有反归档入口」，这不成立。
+  官方 `workspaceRegistry` 从 `0.1.7-rc.2` 起就有 `unarchiveSession`，0.2.x 还提供远程命令
+  `workspace/unarchiveSession`；侧栏「视图选项 → 全部对话（显示已归档）」里即可取消归档，
+  会话回到原位（工作区已删的落到「未分组」）。只有 `0.1.5-rc.2` 那版是"只有归档、没有放回"。
+- **把「不能真正删除会话」改准确**：事实是 **DSH 不提供删除接口**——会话日志仅追加，
+  `dsh-session-persistence` 明写 "No deletion or retention API — pruning stored sessions is
+  out-of-band backend maintenance"。插件因此只归档、不碰日志文件；要彻底抹掉得在 DSH 关闭时
+  自己删磁盘上的会话（带外维护）。
+- **新增《想连痕迹一起清掉》**（README §3）：把「归档 / 删除工作区 / 删会话日志」三层拆开，列清删除工作区后
+  仍留在磁盘上的四处（会话日志、投影缓存、`workspace.json` 的归档登记、运行日志）、`sessions` 目录名的编码规则、
+  以及手工清理的顺序与前提；并说明 DSH 之外（NTFS USN、卷影副本、备份软件、同步盘）不在可控范围内。
+- 只改文案与文档，**行为没有变化**。
+
 ## [0.5.0] — 2026-10-20
 
 ### 兼容性：适配 DSH 0.2.1-rc.2（桌面版 2026-10 中旬那条线）

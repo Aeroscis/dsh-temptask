@@ -176,6 +176,7 @@ DSH 的树按「工作区归属」分组，而会话归到某个工作区当且�
 | 右键菜单里的「复制任务路径」 | 那一行改为 **打开任务根目录**（官方 `sessionController.openWorkspacePath`，它接受任意路径）；宿主不能打开文件夹时自动退回"复制"。**复制始终留在齿轮里**（次要动作不跟主按钮抢位置） | 「打开」是目的地动作，「复制」是它的权宜替代——但粘进终端/编辑器仍有用，所以两者都留，只是分层：能用就用打开，不能用才复制 |
 | 「把工作区移动到别的目录」（改 `path`） | **不存在这个能力**：改成「搬目录 → 删旧节点记录 → 在新路径建记录」三步编排（`promote.ts`） | 注册表只有 `create/get/list/delete/resolveByPath/insertBefore`，实体只有 `setTitle/attachSession/...`；记录的键就是 realpath 归一化后的路径字符串，**没有 setPath/move**。所以"移动工作区"只能表现为"换一个目录重新登记"，旧记录必须显式删掉，否则侧边栏会留一个指向空路径的死节点 |
 | 「强制改写会话的 cwd，把对话直接移动过去」 | **明确不做**：改用官方 fork 的种子机制，在**新 cwd 下重建一条会话**（历史完整、id 是新的），旧会话按现有策略归档 | 全库没有 `setCwd`/`updateHeader`；JSONL 存储是**仅追加**的，header 是带校验和的 Zstandard 帧，日志所在项目目录名还编码了 cwd（`--<normalized-cwd>--/`）。硬改盘上字节的失败模式是**整段对话被判为损坏、读不出来**——拿用户的历史去赌一个"看起来更干净"的实现，不划算。种子路径则是官方 `sessionController.fork()` 自己走的那条路（`agents.create({ seed, inheritedEventCount, meta })`），只是把 `meta.cwd` 指向新家 |
+| 「清理任务时连会话一起删掉」 | **不做**：只调官方的 `archiveSession` | DSH 没有删除会话的接口：会话日志仅追加，`dsh-session-persistence` 明写 "No deletion or retention API — pruning stored sessions is out-of-band backend maintenance"，`dsh-workspace` 也把 session deletion 列为缺失能力。从磁盘上删要同时动会话目录、`session_projcache` 与 `workspace.json` 里的账目，那是用户自己的带外维护，插件不碰。归档是官方能力，且官方提供「取消归档」（`unarchiveSession`：`0.1.7-rc.2` 起有，`0.1.5-rc.2` 没有；`0.2.1-rc.2` / `rc.3` 现场核对过），所以不存在"归档了就拿不回来"的问题——被删任务归档下来的会话，取消归档后会落在「未分组」里，只是它的 cwd 已经没了（彻底清理的手工步骤与路径见 README 的《想连痕迹一起清掉》） |
 | 删除的二次确认 | UI 弹确认对话框 + 命令必须 `--yes` + 服务端强制 `confirm: true` | 三层都拦，绕过 UI 也删不掉 |
 | 插件数据目录 | `<DSH_HOME>/plugin-data/dsh-temptask` | 可用 `dataDir` 覆盖（重启生效） |
 | TypeScript 严格模式 | `src/` 全部 strict 编译通过 | `lib/`、`client/` 是构建产物（DSH 加载的是 JS）。官方 `@deepseek-ai/dsh-*` 包**不带 `.d.ts`**，所以 `src/dsh.d.ts` 用逐条抄自 live Inspect 目录与官方源码的最小声明固定了本插件真正用到的契约 |
@@ -231,8 +232,10 @@ DSH 的树按「工作区归属」分组，而会话归到某个工作区当且�
   `evaluatePluginCompatibility`（runtime `0.2.0-rc.2`）实测，返回 `undefined`（= 兼容）。
 - **开发与验证环境**（Windows 上实测，Linux 由 GitHub Actions 复跑全部检查）：
   - `0.1.5-rc.2`（三方桌面 App DSH Desktop 2.0.13 内置的那条线）：settings 命名空间 + `sessions.open`；
+    这一版的 `workspaceRegistry` **只有 `archiveSession`**，`unarchiveSession` 是 `0.1.7-rc.2` 才加的
+    （2026-11-01 下载两版 tarball 的 `lib/index.js` 与 `dsh-client-ui-workspace` 的 `client.js` 核对）；
   - `0.1.7-rc.2`（官方 DeepSeek Harness 早期桌面版）：同上，界面差异由本插件自行吸收
-    （图标自绘、`order` 取负值）；
+    （图标自绘、`order` 取负值）；从这一版起有 `unarchiveSession` 与侧栏「取消归档」；
   - `0.2.0-rc.1`（0.2.x 线的起点，核心包与桌面版同号）：**插件自身的 Config schema +
     `configEditor`** + `uiWorkspace.openSession`（新形态，见 §4）；
   - `0.2.0-rc.2`（官方桌面版 2026-10 初那条线，2026-10-09 核对）：**与本插件所用接口零差异**——
@@ -257,7 +260,7 @@ DSH 的树按「工作区归属」分组，而会话归到某个工作区当且�
       所以 win32 上 `remote.directoryPicker.pick()` 这条官方路**现在也通了**。
       本插件的「浏览…」按**新名 → 旧名 → remote** 三级取（两个名字都读，见 §2）；
     - 其余接口逐条核对**未变**：`workspaceRegistry` 的
-      `create/get/list/delete/resolveByPath/insertBefore/archiveSession` 与实体的
+      `create/get/list/delete/resolveByPath/insertBefore/archiveSession/unarchiveSession` 与实体的
       `setTitle/attachSession`（`attachSession` 仍按 realpath 硬校验 cwd，仍然**没有** `setPath`）、
       `sessionController` 的 `create/cancel/canOpenWorkspacePath/openWorkspacePath`
       （`ApiSessionCwdConflict` 与 fork 继承 cwd 的行为都没变）、
@@ -461,15 +464,16 @@ npm run check:seed-parity
 
 ### 已知限制
 
-- **不支持真正删除会话**：只能归档（DSH 未提供删除 API，见 README 的《数据在哪》）；
+- **不删会话**：只能归档（DSH 未提供删除 API：日志仅追加、存储层无删除或保留接口，见 §4 与 README 的《数据在哪》）；
 - **跨进程并发**只保证「写前重读 + 按 id 合并」，仍存在亚毫秒级残留窗口（自动化用例是同进程双实例模拟）；
 - **无障碍**：那一行内部控件位于官方 `aria-hidden` 字形槽内，屏幕阅读器无法读取；
   等价动作在「设置 → 插件 → 临时任务」与 `/temptask` 命令里都可键盘到达。
 - **转正搬目录会被"占用"挡住**（Windows 上最常遇到）：活着的会话、正在跑的回合，或者侧边栏终端
   仍握着那个 cwd 时，`rename` 会失败。本插件把它翻译成 `DIR_BUSY` 并提示「先关掉该任务的会话/终端
   再重试」——**此时不会有任何东西被改动**（搬目录是第一步，失败即整体中止）。
-- **转正后旧对话不会"跟着"旧节点**：旧会话按现有策略归档（日志仍在磁盘，DSH 没有反归档入口），
-  新家得到的是复刻出来的新会话。想保留旧会话就改设置 `onDeleteSessions: keep`（它会落到"未分组"）。
+- **转正后旧对话不会"跟着"旧节点**：旧会话按现有策略归档（日志仍在磁盘；可在侧栏「全部对话（显示已归档）」
+  里取消归档，但它不会再出现在旧节点下），新家得到的是复刻出来的新会话。想保留旧会话就改设置
+  `onDeleteSessions: keep`（它会落到"未分组"）。
 - **转正只复刻"已完成的一轮"**：最后一次 `turn/end` 之后还没收尾的内容不会被继承（那部分本来
   就没有可信的结束状态）；没有已完成回合时会退化成空会话。
 - **转正的目标不能落在任务根目录内部**：那会被自动登记逻辑当成新的临时任务，等于原地打转。

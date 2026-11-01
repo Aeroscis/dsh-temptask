@@ -423,7 +423,7 @@ export class TemptaskManager {
    *   2. 若其中有会话还活着（运行中），best-effort `sessionController.cancel` 中止它的当轮，
    *      免得 agent 继续往即将消失的目录里写；
    *   3. 删目录；
-   *   4. 按 `onDeleteSessions` 策略处理会话：`archive` → 逐条归档（从侧边栏消失）/ `keep` → 不动；
+   *   4. 按 `onDeleteSessions` 策略处理会话：`archive` → 逐条归档（从侧边栏隐藏，可取消归档）/ `keep` → 不动；
    *   5. 删工作区记录，最后删本插件记录。
    */
   async remove(
