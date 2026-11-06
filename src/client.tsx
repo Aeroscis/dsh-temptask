@@ -3092,6 +3092,27 @@ const plugin: TemptaskClientPlugin = {
       ),
     );
 
+    /*
+     * 设置页左侧导航的图标。
+     *
+     * 0.2.2 起官方设置页给每个 `settings.section` 行渲染一枚图标（`navIcon(id)` 按 id 取，
+     * 取不到就是通用齿轮）。这个槽位（`settings.section.icon`）在 0.2.2 才声明，且**必须**与
+     * `settings.section` 用同一个 id 才会被渲染——所以照旧走 `slots.inject`：老宿主没有这个
+     * 槽位时 inject 的等待永不触发，什么都不注册，也不会报错。
+     * 图标与侧边栏那一行用同一个自绘标记，两边对得上。
+     */
+    slots.inject('settings.section.icon', () =>
+      slots.register(
+        { name: 'settings.section.icon', id: NS, label: () => t('nav'), locale: NS },
+        (raw) => {
+          const injected = raw as { size?: unknown };
+          return React.createElement(TemporaryTaskMark, {
+            ...(typeof injected.size === 'number' ? { size: injected.size } : {}),
+          });
+        },
+      ),
+    );
+
     ctx.logger?.info?.('[dsh-temptask] client half mounted');
   },
 

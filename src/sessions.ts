@@ -179,6 +179,47 @@ export async function attachSessionToWorkspace(
   }
 }
 
+/**
+ * 读一条会话的历史事件流，读完立刻归还观察租约。
+ *
+ * 为什么不是直接 `query.observeSession(id)`：它返回的是**租约**（lease），不是普通快照。
+ * `dsh-session-query` 的 `preparedLease()` 先 `refs += 1`，冷会话因此被钉在
+ * `SessionCorpus` 的 LRU 缓存里，只有 `[Symbol.dispose]()` 才 `refs -= 1` 并按容量淘汰。
+ * 本插件「转正」要连续读好几条候选会话、`/candidates` 要逐条读标题与摘要，
+ * 读一条丢一条才不会让读过的日志一直挂在观察缓存里。
+ *
+ * 租约对象自己带 `[Symbol.dispose]`（`preparedLease` / `live` 都是这个形状）；
+ * 没有这个方法时说明拿到的不是租约，直接用，什么都不做。
+ *
+ * @param query 宿主的 `sessionQuery` 服务。
+ * @param sessionId 目标会话。
+ * @returns 与 `observeSession()` 同形状的只读快照。
+ */
+export async function observeSessionSnapshot(
+  query: DshSessionQueryService,
+  sessionId: string,
+): Promise<DshSessionObservation> {
+  const observed = await query.observeSession(sessionId);
+  releaseObservation(observed);
+  return observed;
+}
+
+/** 尽力归还一次观察租约；任何失败都不该影响调用方（读到的东西已经在手上了）。 */
+function releaseObservation(observed: DshSessionObservation): void {
+  const holder = observed as unknown as {
+    [Symbol.dispose]?: () => void;
+    dispose?: () => void;
+  };
+  try {
+    // 租约就是那个带 `[Symbol.dispose]` 的字面量对象（见 dsh-session-query 的
+    // `preparedLease` / `live`），其余形态都不是租约，什么都不用做。
+    const release = holder[Symbol.dispose] ?? holder.dispose;
+    if (typeof release === 'function') release.call(holder);
+  } catch {
+    /* 归还失败只影响缓存淘汰，不影响本次读取 */
+  }
+}
+
 /** 统一的错误信息提取。 */
 export function messageOf(error: unknown): string {
   if (error instanceof Error) return error.message;

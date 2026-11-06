@@ -66,6 +66,12 @@ function newState(overrides = {}) {
     sessionOrder: new Map(),
     /** agentPresets.mount 的调用记录（证明复刻会话真的装配了预设）。 */
     presetMounts: [],
+    /** true = observeSession 返回带 `[Symbol.dispose]` 的租约（宿主的真实形态）。 */
+    leaseObservations: false,
+    /** 观察过的会话 id（按调用顺序）。 */
+    observedLeases: [],
+    /** 已归还租约的会话 id（`[Symbol.dispose]()` 真的被调用过）。 */
+    disposedLeases: [],
     ...overrides,
   };
 }
@@ -221,7 +227,7 @@ function createStubContext(state) {
       const cwd = state.sessionCwd.get(sessionId);
       const preset = state.sessionPresets.get(sessionId);
       const title = state.sessionTitles.get(sessionId);
-      return {
+      const observation = {
         header: { id: sessionId, ...(cwd === undefined ? {} : { cwd }) },
         events,
         inheritedEventCount: 0,
@@ -231,6 +237,20 @@ function createStubContext(state) {
             ...(preset === undefined ? {} : { agentPreset: preset }),
             ...(title === undefined ? {} : { title }),
           },
+        },
+      };
+      // observeSession 返回的是**租约**：对象自带 `[Symbol.dispose]`，
+      // 调用方读完必须归还，否则冷会话会被 `SessionCorpus` 一直钉在内存里。
+      // 桩复刻这个形状，才能测出插件有没有归还（见下方「观察租约」用例）。
+      if (state.leaseObservations !== true) return observation;
+      state.observedLeases.push(sessionId);
+      let disposed = false;
+      return {
+        ...observation,
+        [Symbol.dispose]() {
+          if (disposed) return;
+          disposed = true;
+          state.disposedLeases.push(sessionId);
         },
       };
     },
@@ -1612,6 +1632,55 @@ try {
         .find((row) => row.path.endsWith('kept-history'));
       assert.ok(ws !== undefined, '修复后工作区仍在');
       assert.ok(ws.sessionIds.length >= 2, `修复后应有至少 2 条会话，实际 ${ws.sessionIds.length}`);
+    });
+  }
+
+  /* ─── 观察租约：observeSession 的返回值必须归还 ─── */
+  {
+    const leaseState = newState({ leaseObservations: true });
+    const lease = createStubContext(leaseState);
+    plugin.apply(lease.ctx, {
+      rootDir: join(workspace, 'lease-root'),
+      dataDir: join(workspace, 'lease-data'),
+      autoCleanDays: 0,
+    });
+
+    // 造一个任务，再往它的会话里塞一轮完整对话。
+    const first = await call(lease.routes, `${API}/create`, 'POST', {});
+    leaseState.sessionEvents.set(first.sessionId, [
+      { type: 'user/message', seq: 0, time: 1, data: { content: [{ type: 'text', text: '租约那次的对话' }] } },
+      { type: 'turn/start', seq: 1, time: 2, data: { turn: 't1' } },
+      { type: 'turn/end', seq: 2, time: 3, data: { turn: 't1' } },
+    ]);
+    leaseState.sessionTitles.set(first.sessionId, '租约对话');
+
+    // /candidates 会读会话标题与摘要（每条一条观察）。
+    await call(lease.routes, `${API}/candidates`, 'POST', {});
+    check('观察租约：/candidates 读过的会话全部归还了租约（引用计数不会攒着）', () => {
+      assert.ok(leaseState.observedLeases.includes(first.sessionId), '应当观察过这条会话');
+      assert.deepEqual(
+        [...new Set(leaseState.observedLeases)].sort(),
+        [...new Set(leaseState.disposedLeases)].sort(),
+        `观察过的会话都该归还；观察 ${JSON.stringify(leaseState.observedLeases)}，归还 ${JSON.stringify(leaseState.disposedLeases)}`,
+      );
+    });
+
+    // 转正会逐条试候选会话（同样每条一次观察）。
+    await mkdir(join(workspace, 'lease-formal'), { recursive: true });
+    leaseState.observedLeases.length = 0;
+    leaseState.disposedLeases.length = 0;
+    const promoted = await call(lease.routes, `${API}/promote`, 'POST', {
+      id: first.task.id,
+      name: 'lease-promoted',
+      parentDir: join(workspace, 'lease-formal'),
+      carry: true,
+      open: false,
+      confirm: true,
+    });
+    check('观察租约：转正逐条试候选时，每读一条都当场归还', () => {
+      assert.equal(promoted.ok, true, JSON.stringify(promoted));
+      assert.ok(leaseState.observedLeases.length >= 1, '至少要读过一条来源会话');
+      assert.deepEqual(leaseState.disposedLeases, leaseState.observedLeases, '读一条就该还一条');
     });
   }
 

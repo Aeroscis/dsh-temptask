@@ -78,6 +78,11 @@ DSH 的树按「工作区归属」分组，而会话归到某个工作区当且�
 
 只隐藏本行那一个重复标题，其它面板行不受影响；`label` 仍保持非空——官方用它做 tooltip 与无障碍名。
 
+设置页左侧导航的图标另有一个槽位：`0.2.2` 起官方给每个 `settings.section` 行渲染一枚图标
+（`navIcon(id)` 按 id 取，取不到就是通用齿轮），声明的槽位是 `settings.section.icon`，
+**必须与本行的 `settings.section` 用同一个 id** 才会被渲染。本插件注册了它（同一个自绘标记，
+与侧边栏那一行对得上）；老宿主没有这个槽位，`slots.inject` 的等待就不触发，不注册也不报错。
+
 ## 3. 架构与执行顺序
 
 ```
@@ -87,6 +92,7 @@ DSH 的树按「工作区归属」分组，而会话归到某个工作区当且�
         │                      → 会话行上的「转正此任务」        │
         │ shell.overlay        → 说明 / 清理框 / **转正模态** / 齿轮 │
         │ settings.section     → 配置卡片 + 清理入口             │
+        │ settings.section.icon→ 上面那一行在设置页导航里的图标   │
         │ （任务列表本身由官方 WorkspaceBrowser 按工作区分组渲染）│
         └───────────────┬──────────────────────────────────────┘
                         │  fetch("/dsh-temptask/api/*")   ← 同源 + 回环围栏
@@ -246,7 +252,7 @@ DSH 的树按「工作区归属」分组，而会话归到某个工作区当且�
     没动本插件占用的插槽与服务，所以**本次没有代码改动**（见 CHANGELOG 0.4.2）。
     rc.2 对插件侧唯一可感知的变化是**安装路径**：Desktop 自带的命令运行时可管理
     desktop profile 的插件，npm CLI 仍然拒绝。
-  - `0.2.1-rc.2`（官方桌面版 2026-10-18 那条线，**本次适配**）：宿主换成
+  - `0.2.1-rc.2`（官方桌面版 2026-10-18 那条线）：宿主换成
     `@deepseek-ai/dsh-desktop-runtime@0.2.1-rc.2`，**运行时整个打包进 `app.asar`**
     （普通 `ripgrep`/Node 读不到里面的文件，校验脚本要用 `DSH_APP_ROOT` 指向解包出来的树，
     见 §5）。实测结论：
@@ -274,6 +280,33 @@ DSH 的树按「工作区归属」分组，而会话归到某个工作区当且�
       **六个都还在**（会话行那两个是本版本新用上的，见 §2）；
     - **种子语义仍逐字节一致**：`check:seed-parity` 对着 `dsh-session@0.2.1-rc.2` 的真实
       `buildForkSeed` 跑 10 项全过（含从 `dsh-api-session-controller` 里切出边界函数现场编译比对）。
+  - `0.2.2-rc.1`（桌面版 `DSH NEXT` 2.0.22-next 内置的运行时，**本次适配**；`dsh-desktop-next`
+    2.0.22-next 把 `@deepseek-ai/dsh` 0.2.2-rc.1 装在自己的 `app.asar` 里）。实测结论：
+    - **版本门槛仍然不用改**：`0.2.2-rc.1` 与 `0.2.2` 都落在 `^0.2.0-rc.1` 里
+      （`evaluatePluginCompatibility` 返回 `undefined`），`0.3.0-rc.1` 才被拒。
+    - **修掉一处一直存在的资源占用**：`sessionQuery.observeSession()` 返回的是**租约**，
+      不是普通快照。`dsh-session-query` 的 `preparedLease()` 先 `refs += 1`，冷会话因此被钉在
+      `SessionCorpus` 的 LRU 缓存里，只有 `[Symbol.dispose]()` 才 `refs -= 1` 并按容量淘汰。
+      本插件此前读完不释放：转正逐条试候选会话、`/candidates` 逐条读标题摘要，读过的日志
+      会一直挂在观察缓存里。现在两条读路径都走 `sessions.ts` 的 `observeSessionSnapshot()`
+      （读完调用 `[Symbol.dispose]()`，没有这个方法就当普通快照）。
+      这条不是 0.2.2 才出现的问题——`dsh-session-query@0.1.5-rc.2` 的 `preparedLease`
+      已经是这个形状，只是本轮核对时才看出来。`scripts/smoke.mjs` 新增 2 项把
+      「读一条还一条」变成判据。
+    - 其余接口逐条核对**未变**：服务名（`sessionController` / `sessions` / `agents` / `sessionQuery` /
+      `workspaceRegistry` / `agentPresets` / `agentDefaultModel` / `configEditor` / `webServer` /
+      `commands` / `settings`）在 0.2.2 产物里逐个确认；
+      `workspaceRegistry` 仍**没有** `setPath`、`attachSession` 仍按 realpath 硬校验 cwd；
+      `agents.create` 的 `CreateAgentOptions`（`setup` 仍按 `(agentCtx, agent)` 两个参数调用）、
+      `sessionQuery` 的默认投影、`agentPresets.resolve/mount`、
+      `configEditor.edit`、`remote.directoryPicker.pick`，以及本插件用的客户端插槽都在
+      （其中 `settings.section.icon` 是这一版新声明的，见 §2）。
+    - **桌面版的渲染进程令牌不影响本插件**：`DSH NEXT` 在主进程里给宿主 HTTP 加了访问控制
+      （`x-dsh-desktop-renderer` 头 + 403 `Browser access is disabled`），
+      见 `lib/desktop-browser-access-*.js`。桌面窗口里的 fetch 由主进程的
+      `onBeforeSendHeaders` 自动补这个头，插件自己的 `/dsh-temptask/api/*` 因此照旧可达。
+    - **种子与注册契约仍一致**：`check:seed-parity` 对着 `dsh-session@0.2.2-rc.1` 10 项全过，
+      `check:registration` 对着 `dsh-client-modules@0.2.2-rc.1` 3 项全过。
 - **依赖的宿主能力**（缺失时逐项降级，**任何一种缺失都不会让插件加载失败**）：
   `sessionController`（`create` / `cancel` / `openWorkspacePath`）、`workspaceRegistry`、`commands`、
   `webServer`；配置侧在 0.1.x 用 `settings` 命名空间、在 0.2.0-rc.1 起用 `configEditor`
@@ -306,9 +339,9 @@ DSH 的树按「工作区归属」分组，而会话归到某个工作区当且�
 pnpm install
 pnpm typecheck     # host + client 两套 tsconfig，strict
 pnpm build         # src/ → lib/ + client/client.js
-pnpm check:pack    # 发布形态自检 6 项（入口/源码/脚本是否都被 files 覆盖）
-pnpm smoke         # 端到端/渲染冒烟测试（72 host + 58 client，不需要 DSH 进程）
-pnpm check:registration  # 用宿主真实的 dsh-client-modules 校验 ModuleLoader 注册契约（需要 DSH 桌面应用）
+pnpm check:pack    # 发布形态自检 7 项（入口/源码/脚本是否都被 files 覆盖）
+pnpm smoke         # 端到端/渲染冒烟测试（74 host + 59 client，不需要 DSH 进程）
+pnpm check:registration  # 用宿主真实的 dsh-client-modules 与 SlotCore 校验注册契约与槽位声明（需要 DSH 桌面应用）
 pnpm check:seed-parity   # 用宿主真实的 buildForkSeed 逐字节校验种子构造（需要 DSH 桌面应用）
 pnpm check         # typecheck + build + check:pack + smoke + check:registration + check:seed-parity
 ```
@@ -316,7 +349,7 @@ pnpm check         # typecheck + build + check:pack + smoke + check:registration
 `check:pack` 也挂在 `prepack` 上，所以 `npm pack` / `npm publish` 之前会自动跑一遍：
 `files` 少写一条（例如漏了 `src`）在源码目录里跑测试是发现不了的，只有装包的人才会撞上。
 
-`scripts/smoke.mjs`（**72 项**）用桩 Cordis 上下文挂载 `lib/index.js` 直打 HTTP 路由。
+`scripts/smoke.mjs`（**74 项**）用桩 Cordis 上下文挂载 `lib/index.js` 直打 HTTP 路由。
 桩里的 `workspaceRegistry` **刻意复刻 DSH 的语义**（`create` 走真实 `realpath`、`attachSession`
 硬校验 `cwd === workspace.path`），覆盖：时间戳目录、任务=工作区、会话只传 `cwd`、挂载、
 **会话标题变化不改动节点名**（回归用例：发 `session/title` 事件后节点标题仍是目录名、且一次
@@ -348,7 +381,7 @@ pnpm check         # typecheck + build + check:pack + smoke + check:registration
 `carry=false` 走官方 `sessionController`（不碰种子）；两条降级链（读不到事件流 / 没有已完成回合）
 都必须**如实说明原因**且转正照常完成；命令通道先预览后执行、预览阶段目录不动）。
 
-`scripts/smoke-client.mjs`（**58 项**）按 DSH 的方式装载 `client/client.js`
+`scripts/smoke-client.mjs`（**59 项**）按 DSH 的方式装载 `client/client.js`
 （`window.__ModuleLoader__`），断言工厂**只** `require("react")`（任何对宿主包的 require 都会让这条桩
 直接失败）、注册了「那一行 + 兜底空面板 + 浮层×2 + 设置卡片 + **会话行菜单项 + 会话行悬停按钮**」、
 **面板行的 `order` 取负值**（排到官方「插件」面板行 `order: 0` 之前，紧贴「新建会话」）、
@@ -378,6 +411,11 @@ pnpm check         # typecheck + build + check:pack + smoke + check:registration
 （跳过只有附件的空消息、压平空白、超长截断）、`sessionCount`、读满上限后如实报告 `skipped`、
 以及宿主没有 `sessionQuery` 时 `describeSessions: false` 且列表照常给（只显示时间戳）。
 
+**观察租约的归还**（2 项）：桩的 `observeSession` 可以返回 0.2.x 那种带 `[Symbol.dispose]`
+的租约（`newState({ leaseObservations: true })`），断言 `/candidates` 与「转正逐条试候选」
+这两条读路径**读一条还一条**。这一条防的是"读了会话日志却不释放租约"——那种情况下
+一切功能看起来都正常，只是宿主的内存里会挂着读过的日志。
+
 `scripts/check-seed-parity.mjs`（**10 项**，没有 DSH 的机器上自动跳过）把"我们照抄了官方语义"
 这句话变成可执行的判据：它从宿主包里解析出 `@deepseek-ai/dsh-session/fork`，**真的调用**
 官方 `buildForkSeed`，与我们 `src/seed.js` 的输出在 8 组事件流上逐字节比对 `JSON.stringify`；
@@ -385,36 +423,51 @@ pnpm check         # typecheck + build + check:pack + smoke + check:registration
 **切出源码现场编译**再比对返回值（这一条专门防止"拿我们自己的边界去比我们自己的种子"这种自证）。
 任何一条不等，说明宿主改了 fork 语义而 `src/seed.ts` 没跟上——这正是这条校验存在的意义。
 
-`scripts/check-registration.mjs`（**3 项**）补上前面那些桩测不到的一环：它加载**宿主真实的**
-`@deepseek-ai/dsh-client-modules`，按浏览器的顺序装好 `window.__ModuleLoader__` 队列门面，
-然后走一遍宿主那条判据（`loadBundle(url)` → `factories.has(row.id)`）。这条判据要求
-**ModuleLoader 的注册 id 必须等于包名**（`row.id` 就是加载器条目名），所以注册 id 由
-`scripts/build-client.mjs` 从 `package.json` 的 `name` 现读，不再手写。
+`scripts/check-registration.mjs`（**4 项**）补上前面那些桩测不到的两环：
+
+1. 它加载**宿主真实的** `@deepseek-ai/dsh-client-modules`，按浏览器的顺序装好
+   `window.__ModuleLoader__` 队列门面，然后走一遍宿主那条判据（`loadBundle(url)` →
+   `factories.has(row.id)`）。这条判据要求**ModuleLoader 的注册 id 必须等于包名**
+   （`row.id` 就是加载器条目名），所以注册 id 由 `scripts/build-client.mjs` 从
+   `package.json` 的 `name` 现读，不再手写。
+2. 它把本插件注册的每一个槽位喂给宿主**真实的 `SlotCore`**，确认这些槽位在宿主的声明表里。
+   `slots.register` 遇到未声明的槽位会当场抛错，而槽位名写错的后果是**静默**的——
+   `slots.inject` 等一个永不到来的声明，那一块界面就不出现，冒烟测试的桩又会照单全收。
+   声明不是抄在脚本里的表，而是从布局 / 侧边栏 / 设置 / 工作区这四个客户端包的产物里现读
+   （官方把它们写成 `"<名字>": { kind: "…", scope: "…" }` 的字面量），所以宿主改名或移动槽位时
+   这条判据会自己失败。桩里的 `slots.inject` 也照真实语义只在**已声明**时才执行回调——
+   否则老宿主缺 `settings.section.icon` 会被误判成插件注册错了槽位。
 
 宿主代码的位置按版本换过地方，脚本按顺序找：`DSH_APP_ROOT` 环境变量 →
 `C:\Program Files\DSH Desktop\resources\app\node_modules\…`（0.1.x 三方桌面版）→ 本包依赖。
-**0.2.x 起官方桌面版把 dsh 运行时打包进了 `app.asar`**（0.2.1-rc.2 的安装位置变成
-`%LOCALAPPDATA%\Programs\DeepSeek Harness\resources\app.asar`），普通 Node / ripgrep 都读不到
-asar 内部的文件，所以要在新宿主上跑这两项得先解包，再指过去：
+**0.2.x 起官方桌面版把 dsh 运行时打包进了 `app.asar`**：0.2.1-rc.2 那一代在
+`%LOCALAPPDATA%\Programs\DeepSeek Harness\resources\app.asar`，`DSH NEXT` 那一代在
+`C:\Program Files\DSH NEXT\resources\app.asar`。普通 Node / ripgrep 都读不到 asar 内部的文件，
+所以要在新宿主上跑这两项得先解包，再指过去：
 
 ```powershell
 # 本地脚手架（下划线开头的目录已被 .gitignore 忽略，不入库）：
 # 从 app.asar 里按需解出需要的包（内置最小 asar 读取器，不依赖任何 asar 工具）
-node _asar/extract.mjs "$env:LOCALAPPDATA\Programs\DeepSeek Harness\resources\app.asar" _asar/dsh `
+node _asar/extract.mjs "C:\Program Files\DSH NEXT\resources\app.asar" _asar/next `
   dsh-session dsh-api-session-controller dsh-client-modules dsh-workspace dsh-client-ui-workspace `
-  dsh-cordis-client-runner dsh-agent-loop dsh-app-boot dsh-brand dsh-util-values dsh-config-editor `
-  dsh-session-query dsh-agent-preset-registry dsh-agent-default-model dsh-commands dsh-host-webserver `
-  dsh-session-projection dsh-api-workspace-controller semver
+  dsh-agent-loop dsh-app-boot dsh-config-editor dsh-session-query dsh-agent-preset-registry `
+  dsh-agent-default-model dsh-commands dsh-host-webserver dsh-session-projection `
+  dsh-api-workspace-controller dsh-official-bundles dsh-home-paths dsh-launch-environment `
+  dsh-atomic-write dsh-package-manifest cordis cordis-plugin-loader cordis-plugin-group `
+  resolve.exports semver js-yaml
 
-$env:DSH_APP_ROOT = "$PWD\_asar\dsh"   # 指向解出来的树（脚本找 <root>/node_modules/@deepseek-ai/...）
+$env:DSH_APP_ROOT = "$PWD\_asar\next"   # 指向解出来的树（脚本找 <root>/node_modules/@deepseek-ai/...）
 npm run check:registration
 npm run check:seed-parity
 ```
 
-同一个 `_asar/` 里还有两个一次性探针，本次适配就是靠它们得出"只有选择器桥改名"这个结论的：
-`probe-compat.mjs`（拿宿主自己的 `evaluatePluginCompatibility` 判版本门槛；顺手证明
-`^0.2.0-rc.1` 覆盖 `0.2.1-rc.2`）与 `find-bytes.mjs`（在 asar 的字节里搜字符串，
-用来确认 `__DSH_DESKTOP_PICK_DIRECTORY__` 已被 `__DSH_DIRECTORY_PICKER__` 取代）。
+`_asar/extract.mjs` 只按包名解到 `<out>/node_modules/<包>`；`dsh-app-boot` 的自有依赖
+（`js-yaml`、`semver`、`resolve.exports`、`@eslint-community/regexpp`、`ajv`）要按同样方式
+落到 `node_modules/<包>` 才能被 `import` 解析到，`probe-compat.mjs` 才跑得起来。
+
+`_asar/probe-compat.mjs` 用宿主自己的 `evaluatePluginCompatibility` 判版本门槛
+（`^0.2.0-rc.1` 覆盖 `0.2.1-rc.2` / `0.2.1-rc.3` / `0.2.2-rc.1` / `0.2.2`，`0.3.0-rc.1` 被拒）；
+`_asar/find-bytes.mjs` 在 asar 的字节里搜字符串，用来确认桌面版改了哪些全局桥的名字。
 
 脚本会自动适配两代 `makeRequire` 签名（0.1.x 是 `(edges)`，0.2.x 是 `(ownerId, edges)`），
 本机没有 DSH 时该项自动跳过（打印原因并以 0 退出），不影响 `npm run check`。

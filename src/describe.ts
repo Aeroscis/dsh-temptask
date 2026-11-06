@@ -15,6 +15,7 @@
  * 读不到（宿主没有 sessionQuery / 会话日志损坏 / 权限）一律返回空对象，调用方降级回时间戳——
  * 这条路绝不能因为"读摘要失败"而让转正本身不可用。
  */
+import { observeSessionSnapshot } from './sessions.js';
 import type { SeedSourceEvent } from './seed.js';
 
 export interface SessionDescription {
@@ -95,7 +96,9 @@ export async function describeSession(
   if (query === undefined || typeof query.observeSession !== 'function') return {};
   try {
     // 不传 projectionMode：默认投影才带 title（与 agentPreset 同一条路径）。
-    const observed = await query.observeSession(sessionId);
+    // 用 observeSessionSnapshot 而不是直接 observeSession：它的返回值是租约，
+    // 不归还就会把这条会话的日志钉在宿主的观察缓存里（见 sessions.ts）。
+    const observed = await observeSessionSnapshot(query, sessionId);
     const description: SessionDescription = {};
     const title = projectedTitle(observed.projections);
     if (title !== undefined) description.title = title;

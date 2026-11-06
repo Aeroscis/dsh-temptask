@@ -229,7 +229,7 @@ function overlayOf(id) {
   return entry;
 }
 
-check('apply 注册：侧边栏那一行 / 兜底空面板 / 浮层 ×2 / 官方会话行槽位 ×2 / 设置卡片', () => {
+check('apply 注册：侧边栏那一行 / 兜底空面板 / 浮层 ×2 / 官方会话行槽位 ×2 / 设置卡片与它的图标', () => {
   assert.deepEqual(
     registrations.map((item) => item.options.name),
     [
@@ -241,6 +241,8 @@ check('apply 注册：侧边栏那一行 / 兜底空面板 / 浮层 ×2 / 官方
       'sidebar.workspaces.session.menu.item',
       'sidebar.workspaces.session.row.action',
       'settings.section',
+      // 0.2.2 起设置页给每个 section 行渲染图标；没有这个槽位的宿主上 inject 永不触发
+      'settings.section.icon',
     ],
   );
   assert.equal(entryOf('sidebar.panellist').options.id, 'dsh-temptask');
@@ -711,7 +713,15 @@ check('设置卡片渲染根目录 / 自动清理 / 保存（不再有"与 dsh-s
   assert.ok(markup.includes('保存'), markup);
 });
 
-check('配置通道缺失时也注册 7 个插槽：设置卡片与转正入口改走插件自己的 HTTP 接口', () => {
+check('设置页导航图标：与侧边栏那一行同一枚自绘标记，size 跟着宿主给的走', () => {
+  const markup = render(entryOf('settings.section.icon').component, { size: 16 });
+  assert.ok(markup.includes('data-tt-mark="temporary"'), markup);
+  assert.ok(markup.includes('width="16"'), markup);
+  // 没给 size 时也不该渲染 0 宽：组件自己有 16px 兜底
+  assert.ok(render(entryOf('settings.section.icon').component, {}).includes('width="16"'));
+});
+
+check('配置通道缺失时也注册 8 个插槽：设置卡片与转正入口改走插件自己的 HTTP 接口', () => {
   const bare = createClientStub({
     withSettings: false,
     withConfigForms: false,
@@ -728,6 +738,7 @@ check('配置通道缺失时也注册 7 个插槽：设置卡片与转正入口�
       'sidebar.workspaces.session.menu.item',
       'sidebar.workspaces.session.row.action',
       'settings.section',
+      'settings.section.icon',
     ],
   );
 });

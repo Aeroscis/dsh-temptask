@@ -22,6 +22,7 @@
  *     装完插件后验一下"装进去的到底是哪一版"很有用。
  */
 import assert from 'node:assert/strict';
+import { existsSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
 import { createRequire } from 'node:module';
 import { dirname, join } from 'node:path';
@@ -213,5 +214,117 @@ check('宿主 require("<包名>") 拿到插件对象，且 inject/apply 齐全',
     '插件的 inject 列表变了，宿主不会再等这两个服务',
   );
 });
+
+/* ── 3. 每一个注册过的槽位，宿主都声明过 ── */
+/**
+ * slots.register 遇到未声明的槽位会当场抛错（宿主原文："slot … is not declared"）——
+ * 这条判据只有拿宿主的真实 SlotCore 才验得出来：冒烟测试里的 slots 是桩，什么都收。
+ * 而槽位名写错的后果是静默的——slots.inject 等一个永不到来的声明，那一块界面就不出现。
+ *
+ * 声明从**宿主自己的产物**里现读：官方把槽位声明写成 `"<name>": { kind, scope }` 的字面量，
+ * 散在声明它的那个客户端包（layout / sidebar / settings-general / workspace）里。
+ * 所以这里不抄一份声明表，而是扫这几个包、把找到的声明喂给真实的 SlotCore——
+ * 宿主改名或移动槽位时，本判据会自己失败，不会因为「表也一起改错了」而假通过。
+ * 反方向也成立：宿主新增别的新槽位不影响这里（本插件没注册它）。
+ */
+const DECLARING_PACKAGES = [
+  'dsh-client-ui-layout',
+  'dsh-client-ui-sidebar',
+  'dsh-client-ui-settings-general',
+  'dsh-client-ui-workspace',
+];
+
+// hostUrl 形如 <...>/node_modules/@deepseek-ai/dsh-client-modules/lib/client.js；
+// 上溯四级（lib → 包 → @deepseek-ai → node_modules）就是声明包所在的 node_modules 根。
+const hostPackageDir = dirname(dirname(fileURLToPath(hostUrl))); // <...>/@deepseek-ai/<包>
+const modulesRoot = dirname(dirname(hostPackageDir)); // <...>/node_modules
+
+let slotCore;
+let slotCoreError;
+let declarations;
+try {
+  for (const pkgName of DECLARING_PACKAGES) {
+    const clientPath = join(modulesRoot, '@deepseek-ai', pkgName, 'lib', 'client.js');
+    if (!existsSync(clientPath)) continue;
+    const source = await readFile(clientPath, 'utf8');
+    for (const match of source.matchAll(/"([a-zA-Z][\w.]*)":\s*\{\s*kind:\s*"([a-z]+)",\s*scope:\s*"([a-z-]+)"/gu)) {
+      const [, name, kind, scope] = match;
+      // 官方声明里 default 顺序固定为 kind 然后 scope；inline 之类的附加字段不影响判定，
+      // 这里只按 kind/scope 建表（SlotCore 的 register 也只校验这两项）。
+      declarations ??= new Map();
+      if (!declarations.has(name)) declarations.set(name, { kind, scope });
+    }
+  }
+  const slotsUrl = new URL(
+    hostUrl.replace('dsh-client-modules/lib/client.js', 'dsh-client-ui-slots/lib/index.js'),
+  );
+  ({ SlotCore: slotCore } = await import(slotsUrl.href));
+} catch (error) {
+  slotCoreError = error;
+}
+
+if (slotCore === undefined || declarations === undefined) {
+  console.log(
+    `跳过槽位声明校验：找不到 @deepseek-ai/dsh-client-ui-slots 或它的声明包（${slotCoreError?.message ?? ''}）。`,
+  );
+} else {
+  const core = new slotCore();
+  for (const [name, spec] of declarations) core.record(name).spec = spec;
+
+  const registered = [];
+  const failures = [];
+  const stubSlots = {
+    register(options) {
+      try {
+        core.register(options, () => null);
+        registered.push(options.name);
+      } catch (error) {
+        failures.push(`${options.name}（id=${options.id ?? options.key ?? '—'}）：${error.message}`);
+      }
+      return () => {};
+    },
+    // 真实的 slots.inject 只有在**该槽位已被声明**时才执行回调（声明可能晚到，也可能永不到来）。
+    // 桩必须复刻这一条：否则「老宿主没有某个槽位」会被误判成「插件注册错了槽位」。
+    inject(key, callback) {
+      if (declarations.has(key)) callback();
+      return () => {};
+    },
+  };
+  // 其余服务给最小桩：这一项只关心插槽能不能登记。
+  let applyError;
+  try {
+    plugin.apply({
+      logger: { info() {}, warn() {} },
+      get: (name) => (name === 'slots' ? stubSlots : undefined),
+      effect: (fn) => {
+        const disposer = fn();
+        return () => {
+          if (typeof disposer === 'function') disposer();
+        };
+      },
+    });
+  } catch (error) {
+    applyError = error;
+  }
+
+  check(`宿主声明表接受本插件注册的全部槽位（${registered.length} 项）`, () => {
+    assert.equal(applyError, undefined, `apply 抛错：${applyError?.message}`);
+    assert.deepEqual(failures, [], `宿主没声明这些槽位：\n  ${failures.join('\n  ')}`);
+    // 老宿主没有 settings.section.icon（0.2.2 才声明），所以这一项允许缺席；
+    // 其余七项在每个受支持的宿主上都必须注册成功。
+    const expected = [
+      'sidebar.panellist',
+      'main',
+      'shell.overlay',
+      'shell.overlay',
+      'sidebar.workspaces.session.menu.item',
+      'sidebar.workspaces.session.row.action',
+      'settings.section',
+      ...(declarations.has('settings.section.icon') ? ['settings.section.icon'] : []),
+    ];
+    assert.deepEqual(registered, expected, '注册的槽位清单变了');
+  });
+
+}
 
 console.log(`\n✅ 注册契约 ${passed} 项通过（宿主真实实现）`);

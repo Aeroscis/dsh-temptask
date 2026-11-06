@@ -34,6 +34,7 @@ import {
   isSessionLive,
   messageOf,
   mintSessionId,
+  observeSessionSnapshot,
 } from './sessions.js';
 import {
   archiveSessionQuietly,
@@ -295,7 +296,8 @@ async function carryHistory(
   for (const id of ids) {
     try {
       // 不传 projectionMode：默认投影才有 `agentPreset`（官方 fork 也是这么读来源会话的）。
-      const candidate = await query.observeSession(id);
+      // 用完立刻归还租约：观察是引用计数的，逐条试候选时不能把前几条钉在内存里。
+      const candidate = await observeSessionSnapshot(query, id);
       const seed = buildSeed(candidate.events as readonly SeedSourceEvent[]);
       if (seed === undefined) {
         skipped.push(id);

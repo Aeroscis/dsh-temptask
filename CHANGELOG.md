@@ -4,7 +4,50 @@
 
 发布渠道：npm [`@aeroscis/dsh-temptask`](https://www.npmjs.com/package/@aeroscis/dsh-temptask) · 源码 <https://github.com/Aeroscis/dsh-temptask>
 
-## [未发布]
+## [0.6.0] — 2026-11-06
+
+### 兼容性：适配 DSH 0.2.2-rc.1（桌面版 DSH NEXT 2.0.22-next 内置的运行时）
+
+- **版本门槛不用改**：宿主自己的 `evaluatePluginCompatibility`（`dsh-app-boot`）用
+  `semver.satisfies(runtime, range, { includePrerelease: true })` 判定，`^0.2.0-rc.1`
+  覆盖 `0.2.1-rc.2` / `0.2.1-rc.3` / `0.2.2-rc.1` / `0.2.2`，`0.3.0-rc.1` 才被拒。
+  `engines.dsh` 与 peer 范围**保持原样**。实测用的是宿主自己那个函数（见 `docs/DESIGN.md` §6）。
+- **修掉一处一直存在的资源占用**：`sessionQuery.observeSession()` 返回的其实是**租约**，
+  不是普通快照——`dsh-session-query` 的 `preparedLease()` 会先 `refs += 1`，冷会话因此被
+  钉在 `SessionCorpus` 的 LRU 缓存里，只有调用 `[Symbol.dispose]()` 才会 `refs -= 1` 并按容量淘汰。
+  本插件此前读完不释放：「转正」逐条试候选会话、`/candidates` 逐条读标题与摘要，读过的日志
+  会一直挂在观察缓存里。现在两条读路径都走 `sessions.ts` 的 `observeSessionSnapshot()`，
+  读完立刻释放（有 `[Symbol.dispose]` 就调它，没有就当普通快照，0.1.x 起都兼容）。
+  `scripts/smoke.mjs` 新增 2 项把「读一条还一条」变成判据。
+  这条不是 0.2.2 才出现的问题：`dsh-session-query@0.1.5-rc.2` 的 `preparedLease` 已经是这个形状。
+- **逐条核对未变**的接口：`workspaceRegistry`（`create/get/list/delete/resolveByPath` 与实体的
+  `setTitle/attachSession/insertSessionBefore`，仍**没有** `setPath`，`attachSession` 仍按 realpath
+  硬校验 cwd）、`sessionController`（`create/cancel/canOpenWorkspacePath/openWorkspacePath/fork`）、
+  `agents.create` 的 `CreateAgentOptions`（`seed`/`inheritedEventCount`/`meta`/`setup`/`agentOptions`）、
+  `sessionQuery.observeSession/listSessions` 的默认投影与返回值、
+  `agentPresets.resolve/mount`、`agentDefaultModel.currentSelection`、`configEditor.edit`、
+  `webServer.register`（`kind: 'exact' | 'prefix'`）、`commands.register`、
+  `remote.directoryPicker.pick`，以及本插件占用的客户端插槽
+  （`sidebar.panellist` / `main` / `shell.overlay` ×2 / `settings.section` /
+  `sidebar.workspaces.session.menu.item` / `sidebar.workspaces.session.row.action`，
+  本轮起再加 `settings.section.icon`）。
+  主机的服务名（`sessionController` / `sessions` / `agents` / `sessionQuery` / `workspaceRegistry` /
+  `agentPresets` / `agentDefaultModel` / `configEditor` / `webServer` / `commands` / `settings`）
+  逐个在 0.2.2 的产物里确认过。
+- **fork 种子的构造仍逐字节一致**：`check:seed-parity` 对着 `dsh-session@0.2.2-rc.1` 的真实
+  `buildForkSeed` 跑 10 项全过。
+- **`check:registration` 多验了一件事**（3 项 → 4 项）：除了 ModuleLoader 的注册 id，
+  现在还拿宿主**真实的 `SlotCore`** 确认本插件注册的每个槽位都在宿主的声明表里。
+  `slots.register` 遇到未声明的槽位会当场抛错，而这类错误此前只能靠人工看界面发现——
+  槽位名写错时插件不报错，只是那一块界面静默消失。声明从宿主产物里现读，不是脚本里抄的表。
+- **用上 0.2.2 新增的一处界面能力**：设置页左侧导航从这一版起给每个 `settings.section` 行
+  渲染一枚图标（`settings.section.icon`，按 id 与 section 对齐；不注册就用通用齿轮）。
+  本插件现在注册了它，图标与侧边栏那一行是同一枚自绘标记。老宿主没有这个槽位，
+  `slots.inject` 不触发，行为与之前一致。
+- **桌面版的新行为不影响本插件**：`DSH NEXT` 给宿主 HTTP 加了「渲染进程令牌」访问控制
+  （`x-dsh-desktop-renderer` 头 + 403 `Browser access is disabled`）。桌面窗口里的请求由
+  Electron 主进程自动补这个头，插件自己的 `/dsh-temptask/api/*` 因此照旧可达；浏览器直接访问
+  那个端口本来就会被拦，与插件无关。
 
 ### 修正：关于「取消归档」与「删除会话」的说法
 

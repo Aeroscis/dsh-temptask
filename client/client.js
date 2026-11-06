@@ -52,7 +52,7 @@ window.__ModuleLoader__.load({
     /**
      * 客户端半边的版本 —— **构建期注入，不要手写**。
      *
-     * `0.5.0` 是 `scripts/build-client.mjs` 的替换点：包装 ModuleLoader
+     * `0.6.0` 是 `scripts/build-client.mjs` 的替换点：包装 ModuleLoader
      * 包时换成当时的 `package.json` 的 `version`，找不到占位符就直接构建失败。浏览器里
      * 读不到 `package.json`，所以这一半只能在构建期定版。
      *
@@ -63,7 +63,7 @@ window.__ModuleLoader__.load({
      * 历史：0.4.0 忘了改这里的字面量，发布出去的包里 host 报 `0.4.0`、界面报 `0.3.3`，
      * 设置卡片与 `?` 气泡一直挂着"两半版本不一致"的告警。改成注入后不可能再漂移。
      */
-    const CLIENT_VERSION = '0.5.0';
+    const CLIENT_VERSION = '0.6.0';
     /**
      * `?` 气泡的"鼠标离开后自动收起"延迟（毫秒）。
      * 取值依据：450ms 是「不误收」与「不显得拖沓」之间的取值（600ms 偏慢）。
@@ -2097,6 +2097,21 @@ window.__ModuleLoader__.load({
                 initial: defaultConfigShape(),
                 runtime,
             })));
+            /*
+             * 设置页左侧导航的图标。
+             *
+             * 0.2.2 起官方设置页给每个 `settings.section` 行渲染一枚图标（`navIcon(id)` 按 id 取，
+             * 取不到就是通用齿轮）。这个槽位（`settings.section.icon`）在 0.2.2 才声明，且**必须**与
+             * `settings.section` 用同一个 id 才会被渲染——所以照旧走 `slots.inject`：老宿主没有这个
+             * 槽位时 inject 的等待永不触发，什么都不注册，也不会报错。
+             * 图标与侧边栏那一行用同一个自绘标记，两边对得上。
+             */
+            slots.inject('settings.section.icon', () => slots.register({ name: 'settings.section.icon', id: NS, label: () => t('nav'), locale: NS }, (raw) => {
+                const injected = raw;
+                return React.createElement(TemporaryTaskMark, {
+                    ...(typeof injected.size === 'number' ? { size: injected.size } : {}),
+                });
+            }));
             ctx.logger?.info?.('[dsh-temptask] client half mounted');
         },
         __internals: {
