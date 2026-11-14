@@ -1,0 +1,145 @@
+{
+  "$comment": "本文件由 node scripts/compat-probe.mjs --write-baseline 生成，记录确认可用的宿主版本与接口表面，供后续升级比对。",
+  "runtime": "0.2.2-rc.1",
+  "recordedAt": "2026-11-09T16:41:54.993Z",
+  "surface": {
+    "hostServices": {
+      "webServer": {
+        "provided": true,
+        "provider": "dsh-host-webserver",
+        "missingMembers": []
+      },
+      "commands": {
+        "provided": true,
+        "provider": "dsh-commands",
+        "missingMembers": []
+      },
+      "workspaceRegistry": {
+        "provided": true,
+        "provider": "dsh-workspace",
+        "missingMembers": []
+      },
+      "sessionController": {
+        "provided": true,
+        "provider": "dsh-api-session-controller",
+        "missingMembers": []
+      },
+      "sessions": {
+        "provided": true,
+        "provider": "dsh-session",
+        "missingMembers": []
+      },
+      "agents": {
+        "provided": true,
+        "provider": "dsh-agent",
+        "missingMembers": []
+      },
+      "sessionQuery": {
+        "provided": true,
+        "provider": "dsh-session-query",
+        "missingMembers": []
+      },
+      "agentPresets": {
+        "provided": true,
+        "provider": "dsh-agent-preset-registry",
+        "missingMembers": []
+      },
+      "agentDefaultModel": {
+        "provided": true,
+        "provider": "dsh-agent-default-model",
+        "missingMembers": []
+      },
+      "configEditor": {
+        "provided": true,
+        "provider": "dsh-config-editor",
+        "missingMembers": []
+      }
+    },
+    "clientServices": {
+      "slots": {
+        "provided": true,
+        "provider": "dsh-client-ui-renderer",
+        "missingMembers": []
+      },
+      "locale": {
+        "provided": true,
+        "provider": "dsh-client-locale",
+        "missingMembers": []
+      },
+      "uiWorkspace": {
+        "provided": true,
+        "provider": "dsh-client-ui-workspace",
+        "missingMembers": []
+      }
+    },
+    "slots": {
+      "sidebar.panellist": {
+        "declared": true,
+        "kind": "list",
+        "scope": "root"
+      },
+      "main": {
+        "declared": true,
+        "kind": "keyed",
+        "scope": "root"
+      },
+      "shell.overlay": {
+        "declared": true,
+        "kind": "list",
+        "scope": "root"
+      },
+      "sidebar.workspaces.session.menu.item": {
+        "declared": true,
+        "kind": "list",
+        "scope": "root"
+      },
+      "sidebar.workspaces.session.row.action": {
+        "declared": true,
+        "kind": "list",
+        "scope": "root"
+      },
+      "settings.section": {
+        "declared": true,
+        "kind": "list",
+        "scope": "root"
+      },
+      "settings.section.icon": {
+        "declared": true,
+        "kind": "list",
+        "scope": "root"
+      }
+    },
+    "packages": {
+      "@deepseek-ai/dsh-session": {
+        "present": true,
+        "version": "0.2.2-rc.1",
+        "entry": true
+      },
+      "@deepseek-ai/dsh-workspace": {
+        "present": true,
+        "version": "0.2.2-rc.1",
+        "entry": true
+      },
+      "@deepseek-ai/dsh-api-session-controller": {
+        "present": true,
+        "version": "0.2.2-rc.1",
+        "entry": true
+      },
+      "@deepseek-ai/dsh-api-workspace-controller": {
+        "present": true,
+        "version": "0.2.2-rc.1",
+        "entry": true
+      },
+      "@deepseek-ai/dsh-client-ui-session": {
+        "present": true,
+        "version": "0.2.2-rc.1",
+        "entry": true
+      },
+      "@deepseek-ai/dsh-client-ui-workspace": {
+        "present": true,
+        "version": "0.2.2-rc.1",
+        "entry": true
+      }
+    }
+  }
+}

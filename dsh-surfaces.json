@@ -1,0 +1,154 @@
+{
+  "$comment": "本插件依赖的宿主接口。scripts/compat-probe.mjs 读这份清单，去宿主产物里逐项确认还在不在；宿主升级后只说变了什么，不重新推导一遍依赖。新增对宿主接口的调用时，把服务名和方法加进来。",
+  "host": {
+    "services": [
+      {
+        "name": "webServer",
+        "members": [
+          "register"
+        ],
+        "why": "src/routes.ts 注册 /dsh-temptask/api/* 端点"
+      },
+      {
+        "name": "commands",
+        "members": [
+          "register"
+        ],
+        "why": "src/host.ts 注册 /temptask 命令"
+      },
+      {
+        "name": "workspaceRegistry",
+        "members": [
+          "get",
+          "create",
+          "delete",
+          "resolveByPath",
+          "archiveSession"
+        ],
+        "why": "读取临时任务节点、建正式工作区、把旧会话归档"
+      },
+      {
+        "name": "sessionController",
+        "members": [
+          "create",
+          "cancel",
+          "fork",
+          "canOpenWorkspacePath",
+          "openWorkspacePath"
+        ],
+        "why": "开临时任务会话、取消、转正时 fork 历史"
+      },
+      {
+        "name": "sessions",
+        "members": [
+          "get",
+          "list"
+        ],
+        "why": "确认会话状态（open 是 0.1.x 的旧入口，新宿主没有，插件已在新路径上改用 uiWorkspace.openSession）"
+      },
+      {
+        "name": "agents",
+        "members": [
+          "create"
+        ],
+        "why": "转正时按 fork 种子在新 cwd 下重建会话"
+      },
+      {
+        "name": "sessionQuery",
+        "members": [
+          "observeSession",
+          "listSessions"
+        ],
+        "why": "读会话标题与摘要，生成转正候选"
+      },
+      {
+        "name": "agentPresets",
+        "members": [
+          "resolve",
+          "mount"
+        ],
+        "why": "转正后的会话挂回 Agent 预设"
+      },
+      {
+        "name": "agentDefaultModel",
+        "members": [
+          "currentSelection"
+        ],
+        "why": "新建会话时沿用当前模型选择"
+      },
+      {
+        "name": "configEditor",
+        "members": [
+          "edit"
+        ],
+        "why": "设置项写入"
+      }
+    ],
+    "packages": [
+      "dsh-session",
+      "dsh-workspace",
+      "dsh-api-session-controller"
+    ],
+    "providerPackages": [
+      "dsh-host-webserver",
+      "dsh-commands",
+      "dsh-workspace",
+      "dsh-api-session-controller",
+      "dsh-session",
+      "dsh-agent",
+      "dsh-session-query",
+      "dsh-agent-preset-registry",
+      "dsh-agent-default-model",
+      "dsh-config-editor"
+    ]
+  },
+  "client": {
+    "services": [
+      {
+        "name": "slots",
+        "members": [
+          "inject",
+          "register"
+        ],
+        "why": "src/client.tsx 注册 7 个插槽"
+      },
+      {
+        "name": "locale",
+        "members": [
+          "register",
+          "bind",
+          "subscribe"
+        ],
+        "why": "中英文字典"
+      },
+      {
+        "name": "uiWorkspace",
+        "members": [
+          "openSession"
+        ],
+        "why": "0.2.x 打开会话的正规入口；插件优先走它，旧宿主才回退到 sessions.open"
+      }
+    ],
+    "slots": [
+      "sidebar.panellist",
+      "main",
+      "shell.overlay",
+      "sidebar.workspaces.session.menu.item",
+      "sidebar.workspaces.session.row.action",
+      "settings.section",
+      "settings.section.icon"
+    ],
+    "packages": [
+      "dsh-api-workspace-controller",
+      "dsh-client-ui-session",
+      "dsh-client-ui-workspace"
+    ],
+    "providerPackages": [
+      "dsh-api-workspace-controller",
+      "dsh-session",
+      "dsh-client-ui-renderer",
+      "dsh-client-locale",
+      "dsh-client-ui-workspace"
+    ]
+  }
+}

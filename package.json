@@ -61,7 +61,9 @@
     "smoke:client": "node scripts/smoke-client.mjs",
     "check:registration": "node scripts/check-registration.mjs",
     "check:seed-parity": "node scripts/check-seed-parity.mjs",
-    "check": "npm run typecheck && npm run build && npm run check:pack && npm run smoke && npm run check:registration && npm run check:seed-parity"
+    "check": "npm run typecheck && npm run build && npm run check:pack && npm run smoke && npm run check:registration && npm run check:seed-parity && node test/compat-rules.test.mjs",
+    "compat": "node scripts/compat-probe.mjs",
+    "compat:baseline": "node scripts/compat-probe.mjs --write-baseline"
   },
   "dsh": {
     "bundle": {
