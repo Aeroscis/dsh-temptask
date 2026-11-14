@@ -1,0 +1,62 @@
+name: publish
+
+# 推 vX.Y.Z 标签时送审；workflow_dispatch 用于手动跑一次（发的是 package.json 里的版本）。
+#
+# 前置条件（在 npmjs.com 上配置一次）：
+#   包 → Settings → Trusted publishers → GitHub Actions，
+#   填仓库 Aeroscis/dsh-temptask、workflow 文件名 publish.yml。
+# 没有这一步，下面的 npm stage publish 会因为没有受信任的发布者而失败。
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      # OIDC 换 token 的开关：没有它，npm 不认这个 workflow 是受信任的发布者。
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          registry-url: https://registry.npmjs.org
+
+      # trusted publishing 要求 npm >= 11.5.1，`npm stage publish` 要求 >= 11.15。
+      - name: 确保 npm 支持 staged publishing
+        run: |
+          set -e
+          current=$(npm --version)
+          echo "npm $current"
+          if [ "$(printf '%s\n' 11.15.0 "$current" | sort -V | head -n1)" != "11.15.0" ]; then
+            npm install -g npm@11
+            npm --version
+          fi
+
+      # 标签和 package.json 对不上直接失败，避免把旧版本重复送审。
+      - name: 标签与 package.json 版本一致
+        if: startsWith(github.ref, 'refs/tags/')
+        run: |
+          set -e
+          version=$(node -p "require('./package.json').version")
+          tag=${GITHUB_REF_NAME#v}
+          if [ "$version" != "$tag" ]; then
+            echo "tag v$tag 与 package.json 的 $version 不一致" >&2
+            exit 1
+          fi
+
+      - name: 安装依赖
+        run: npm ci
+
+      # typecheck + build + 发布形态自检 + 两半快速回归 + 挂载契约 + 种子一致性 + 兼容判定规则。
+      - name: 发布形态自检
+        run: npm run check
+
+      # 只进 stage 队列：npm 要求维护者用 2FA 批准后版本才对外可见。
+      - name: 送审
+        run: npm stage publish
