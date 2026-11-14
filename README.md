@@ -271,6 +271,14 @@ C:\Users\Aeroscis\.dsh\dsh-temptask\2026-11-01-00-00-24
 实现细节、为什么这样设计、逐条核对过哪些官方语义、被否掉的方案、测试与发版流程，都在
 [`docs/DESIGN.md`](docs/DESIGN.md)。
 
+## 9. 分支与发版
+
+日常开发在 `develop` 分支进行，不直接向 `main` 提交。
+
+- `develop`：开发分支。所有改动先提交到这里。
+- `main`：发版分支。只接受从 `develop` 合并过来的提交，tag 只在 `main` 上打。
+- 发版步骤：把 `develop` 合并到 `main`，在 `main` 上打 tag，然后推送 `main` 与 tag。
+
 ## License
 
 MIT
