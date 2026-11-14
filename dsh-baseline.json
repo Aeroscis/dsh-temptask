@@ -1,7 +1,7 @@
 {
   "$comment": "本文件由 node scripts/compat-probe.mjs --write-baseline 生成，记录确认可用的宿主版本与接口表面，供后续升级比对。",
-  "runtime": "0.2.2-rc.1",
-  "recordedAt": "2026-11-09T16:41:54.993Z",
+  "runtime": "0.2.2-rc.3",
+  "recordedAt": "2026-11-14T15:13:06.936Z",
   "surface": {
     "hostServices": {
       "webServer": {
@@ -78,6 +78,11 @@
         "kind": "list",
         "scope": "root"
       },
+      "sidebar.session.action": {
+        "declared": true,
+        "kind": "hoc",
+        "scope": "root"
+      },
       "main": {
         "declared": true,
         "kind": "keyed",
@@ -112,32 +117,32 @@
     "packages": {
       "@deepseek-ai/dsh-session": {
         "present": true,
-        "version": "0.2.2-rc.1",
+        "version": "0.2.2-rc.3",
         "entry": true
       },
       "@deepseek-ai/dsh-workspace": {
         "present": true,
-        "version": "0.2.2-rc.1",
+        "version": "0.2.2-rc.3",
         "entry": true
       },
       "@deepseek-ai/dsh-api-session-controller": {
         "present": true,
-        "version": "0.2.2-rc.1",
+        "version": "0.2.2-rc.3",
         "entry": true
       },
       "@deepseek-ai/dsh-api-workspace-controller": {
         "present": true,
-        "version": "0.2.2-rc.1",
+        "version": "0.2.2-rc.3",
         "entry": true
       },
       "@deepseek-ai/dsh-client-ui-session": {
         "present": true,
-        "version": "0.2.2-rc.1",
+        "version": "0.2.2-rc.3",
         "entry": true
       },
       "@deepseek-ai/dsh-client-ui-workspace": {
         "present": true,
-        "version": "0.2.2-rc.1",
+        "version": "0.2.2-rc.3",
         "entry": true
       }
     }

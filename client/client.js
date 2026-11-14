@@ -23,7 +23,11 @@ window.__ModuleLoader__.load({
      * 形态（与用户确认过的 UI 一致）：
      *   - 侧边栏**一行**：自绘的「🗂 临时任务」标记 + 五个小 pushbutton（**转正** / 清理 /
      *     打开或复制根目录 / 说明 / 设置），行内每个字形都是本插件自己画的 SVG（见下面「图标」一节）；
-     *     位置在「新建会话」按钮正下方——注册 `order` 取负值，排在官方「插件」面板行（order 0）之前；
+     *     位置在「新建会话」按钮正下方。挂法有两种，**按宿主声明了哪个槽位**决定：
+     *       · 宿主声明了 `sidebar.session.action` 时挂在那里（官方「新建会话」那一行里，两者
+     *         一起待在滚动视口之外——用户实测指出过「滚动侧栏时本行跟着滚上去、而新建会话不动」，
+     *         只有离开视口才能和它行为一致）；
+     *       · 没有这个槽位时退回 `sidebar.panellist`（面板列表里第一行）。
      *     **点击标签不会有任何页面**。
      *   - 「转正」还有两个入口挂在**官方会话行**上（`sidebar.workspaces.session.menu.item` 的
      *     "…" 菜单行 + `sidebar.workspaces.session.row.action` 的行尾悬停按钮）：只有这条会话
@@ -34,15 +38,20 @@ window.__ModuleLoader__.load({
      *   - ? 说明是锚在该行下方的小气泡；垃圾桶按钮是居中确认框；两者都渲染在 `shell.overlay` 浮层里
      *     （不会被侧边栏的滚动容器裁掉，也不会嵌套进官方那个 <button>）。
      *
-     * 两个必须知道的实现细节：
-     *   1. `sidebar.panellist` 在官方源码里是**导航按钮**（`PanelRow` → `onClick: selectPanel(id)`，
-     *      键盘 Enter/Space 也只走它）。所以：行内所有点击都 stopPropagation 拦住导航；
-     *      同时注册一个同名 `main` 面板作为兜底——它**渲染 null 并立刻切回 conversation**，
-     *      万一行被键盘激活，也只是闪一下，绝不会出现空白页或新页面。
-     *      代价：行内那四个小按钮处在官方 `aria-hidden` 的字形槽里，对屏幕阅读器不可见；
-     *      同样的动作在「设置 → 插件 → 临时任务」与 `/temptask new|clean` 命令里都可键盘到达。
+     * 三个必须知道的实现细节：
+     *   1. `sidebar.panellist`（老宿主的挂法）在官方源码里是**导航按钮**（`PanelRow` →
+     *      `onClick: selectPanel(id)`，键盘 Enter/Space 也只走它）。所以：行内所有点击都
+     *      stopPropagation 拦住导航；同时注册一个同名 `main` 面板作为兜底——它**渲染 null 并立刻
+     *      切回 conversation**，万一行被键盘激活，也只是闪一下，绝不会出现空白页或新页面。
+     *      `sidebar.session.action`（新挂法）只是 HOC 槽位、不是导航，但拦住点击的做法照旧。
+     *      代价：行内那五个小按钮处在官方 `aria-hidden` 的字形槽里（挂法一）或官方按钮旁边，
+     *      对屏幕阅读器不可见；同样的动作在「设置 → 插件 → 临时任务」与 `/temptask new|clean`
+     *      命令里都可键盘到达。
      *   2. 行文字由本插件渲染（因为要「标签在左、按钮在右」的排布）；注册时给的 `label`
      *      仍然是 i18n thunk，官方用它做 tooltip 与无障碍名。
+     *   3. **不要把它挪回面板列表**：官方面板列表在侧栏的滚动视口里，向下滚动时会被推上去，
+     *      而官方「新建会话」在视口外不动（官方源码：展开态滚动「只滚走导航」）。用户实测
+     *      指出过两者滚动行为不一致——这就是 0.6.2 改成挂 `sidebar.session.action` 的原因。
      *
      * 与 host 的唯一数据通道是 `fetch("/dsh-temptask/api/*")`，见 src/routes.ts。
      */
@@ -52,7 +61,7 @@ window.__ModuleLoader__.load({
     /**
      * 客户端半边的版本 —— **构建期注入，不要手写**。
      *
-     * `0.6.1` 是 `scripts/build-client.mjs` 的替换点：包装 ModuleLoader
+     * `0.6.2` 是 `scripts/build-client.mjs` 的替换点：包装 ModuleLoader
      * 包时换成当时的 `package.json` 的 `version`，找不到占位符就直接构建失败。浏览器里
      * 读不到 `package.json`，所以这一半只能在构建期定版。
      *
@@ -63,7 +72,7 @@ window.__ModuleLoader__.load({
      * 历史：0.4.0 忘了改这里的字面量，发布出去的包里 host 报 `0.4.0`、界面报 `0.3.3`，
      * 设置卡片与 `?` 气泡一直挂着"两半版本不一致"的告警。改成注入后不可能再漂移。
      */
-    const CLIENT_VERSION = '0.6.1';
+    const CLIENT_VERSION = '0.6.2';
     /**
      * `?` 气泡的"鼠标离开后自动收起"延迟（毫秒）。
      * 取值依据：450ms 是「不误收」与「不显得拖沓」之间的取值（600ms 偏慢）。
@@ -294,8 +303,51 @@ window.__ModuleLoader__.load({
         '.__tt_row{display:flex;align-items:center;gap:8px;width:100%;min-width:0}',
         // 宽栏这一行沿用官方「新建会话」按钮的规格（边框 + elevated 底色），避免与侧边栏背景混成一片。
         // 取值逐条抄自官方 .EXfQ3q_newSession：.5px border-l3 + button-elevated-fill + r12 + h38 + padding 8/16。
-        '.__tt_rowWide{box-sizing:border-box;min-height:38px;padding:0;gap:0;margin:0 2px 8px;border:.5px solid var(--dsw-alias-border-l3);border-radius:12px;background:var(--dsw-alias-button-elevated-fill)}',
+        // margin 归外壳管（两种挂法各有一套，见下面两段），这里只管按钮自己的盒子。
+        '.__tt_rowWide{box-sizing:border-box;min-height:38px;padding:0;gap:0;margin:0;border:.5px solid var(--dsw-alias-border-l3);border-radius:12px;background:var(--dsw-alias-button-elevated-fill)}',
         '.__tt_rowWide:hover{background:var(--dsw-alias-button-floating-hover)}',
+        /*
+         * 挂法一（宿主没有 `sidebar.session.action` 槽位时）：
+         * 本行注册在 `sidebar.panellist` 里，宽栏换掉官方面板行的按钮盒子，外层留出与「新建会话」
+         * 那一行相同的边距（官方 .newSessionRow 的 3px 内缩 + 6px 间隙）。
+         *
+         * 注意这条挂法**修不彻底**：宿主把面板列表放在「视口」里（官方源码把面板列表和
+         * 工作区列表一起放进 `overflow-y:auto` 的那个容器），向下滚动时整块导航按宿主自己的设计
+         * 会被推上去，而「新建会话」在视口之外，所以两者不可能被拉平。彻底修法见挂法二。
+         */
+        '.__tt_rowWideFallback{margin:0 calc(var(--dsh-sidebar-paint-inset,3px) + 1px) 8px}',
+        '.__tt_rowRailFallback{margin:0 0 12px}',
+        /*
+         * 挂法二（`sidebar.session.action`）：本行与官方「新建会话」按钮同属侧栏顶部那一行，
+         * 一起待在视口外面，滚动侧栏时两者按同一套规则不动（官方 = 本行的参照）。
+         *
+         * 槽位是 HOC：**宿主把 `.newSessionRow` 里原来的内容（官方按钮）作为 `children` 交给
+         * 占位者**，占位者的返回元素就长在那个 row 里面。所以这里要接住两件事：
+         *   1. 宽度：官方按钮原来靠 `.newSession{flex:1 1 auto}` 撑满那一行；包一层之后是包层
+         *      去当 row 的 flex 子项，必须自己 `flex:1 1 auto;min-width:0`，否则会缩成内容宽，
+         *      比「新建会话」窄一圈。
+         *   2. 边距：那个 row 自己已有水平内缩（官方 .newSessionRow），这里**不能再加**，
+         *      否则本行比官方的窄。竖向 6px 跟官方 row 的控件间距一致。
+         *   不克隆、不改官方按钮：属性、快捷键提示、埋点都归宿主。
+         */
+        '.__tt_sessionAction{flex:1 1 auto;min-width:0;display:flex;flex-direction:column;gap:6px}',
+        /*
+         * 高度必须**固定 38px**（"新建会话"是 `height:38px`）：只给 `min-height` 时，主区自身
+         * 22px 行高 + 上下 8px 内边距已经 38，再加上下各 1px 边框就变成 40——比官方按钮高 2px，
+         * 两条并排时下沿差一截（实测 38 vs 40）。所以这里 height 定死，并把主区上下内边距各收 1px，
+         * 让内容正好落在 38 - 2 = 36 里，不溢出也不压缩。
+         */
+        '.__tt_sessionAction .__tt_rowWide{margin:0;width:auto;flex:1 1 auto;height:38px;min-height:0}',
+        '.__tt_sessionAction .__tt_primary{padding-top:7px;padding-bottom:7px}',
+        // 窄栏（56px 窄条）：官方 `.newSessionRow` 在这一档变成纵向堆叠，间距 4px。
+        '.__tt_sessionActionRail{flex:none;align-items:flex-start;gap:4px}',
+        // 窄栏里没有官方 panelRow 那套样式可借，36px 的圆形入口得自己立尺寸（与窄栏「新建会话」同尺寸）。
+        '.__tt_sessionActionRail .__tt_row{width:36px;height:36px;gap:0}',
+        // 主区在窄栏只剩图标：清掉宽栏的 padding 并把图标居中，否则 36px 里 12px 的内边距会把它压扁。
+        '.__tt_sessionActionRail .__tt_primary{padding:0;justify-content:center;border-radius:var(--dsw-radius-md,8px)}',
+        // 没有官方按钮可包时（槽位只传 wide 不传 children）：本行独占那一行，退回自己的边距。
+        '.__tt_sessionActionOnly{flex:1 1 auto}',
+        '.__tt_sessionActionOnly .__tt_rowWide{margin:0 0 8px}',
         // 官方 .panelRow 自带 padding 与 hover 背景，会把边框挤在里面并露出一圈"行背景"——
         // 所以只在含本行的那一行里清掉（:has 限定，不影响其它面板行）。
         // 官方 .panelGlyph 默认 flex:none，只会缩到内容宽度，行内的 width:100% 撑不开，
@@ -759,14 +811,15 @@ window.__ModuleLoader__.load({
         heart: IconHeart,
     };
     /**
-     * 面板行内容：`🗂 临时任务` │ 四个自绘图标按钮（清理 / 打开或复制根目录 / 说明 / 设置）。
+     * 面板行内容：`🗂 临时任务` │ 五个自绘图标按钮（清理 / 转正 / 打开或复制根目录 / 说明 / 设置）。
      *
-     * 唯一职责是把「标签 + 四个动作」画出来并把点击拦住——**不导航、不出页面**。
+     * 唯一职责是把「标签 + 五个动作」画出来并把点击拦住——**不导航、不出页面**。
      * 所有弹层都由浮层里的 TemptaskTray 呈现（避免嵌套进官方那个 <button>）。
      */
     function TemptaskRow(props) {
         const { runtime, tray } = props;
-        const wide = (props.size ?? 16) === 16;
+        const placement = props.placement ?? 'panel';
+        const wide = !(props.rail ?? (props.size ?? 16) !== 16);
         const [busy, setBusy] = React.useState(false);
         const [copied, setCopied] = React.useState(false);
         const [canOpen, setCanOpen] = React.useState(undefined);
@@ -876,7 +929,8 @@ window.__ModuleLoader__.load({
             swallow(event);
             void create(event);
         };
-        return (React.createElement("span", { className: `__tt_row${wide ? ' __tt_rowWide' : ''}`, onClick: swallow, onMouseDown: swallow },
+        return (React.createElement("span", { className: `__tt_row${wide ? ' __tt_rowWide' : ''}` +
+                (placement === 'panel' ? (wide ? ' __tt_rowWideFallback' : ' __tt_rowRailFallback') : ''), onClick: swallow, onMouseDown: swallow },
             React.createElement("span", { className: `__tt_primary${busy ? ' __tt_primaryBusy' : ''}${wide ? '' : ' __tt_primaryRail'}`, role: "button", tabIndex: 0, "aria-label": runtime.t('create'), title: busy ? runtime.t('creating') : runtime.t('create'), onClick: (event) => void create(event), onKeyDown: onPrimaryKey },
                 busy ? (React.createElement(ICONS.loading, { size: 16 })) : (React.createElement(TemporaryTaskMark, { size: 16 })),
                 wide ? (React.createElement("span", { className: "__tt_primaryLabel" }, busy ? runtime.t('creating') : runtime.t('nav'))) : null),
@@ -892,6 +946,46 @@ window.__ModuleLoader__.load({
                     React.createElement(ICONS.question, { size: 16 })),
                 React.createElement("button", { type: "button", className: "__tt_tiny", title: runtime.t('settingsTitle'), "aria-label": runtime.t('settingsTitle'), onClick: openSettings },
                     React.createElement(ICONS.settings, { size: 16 })))) : null));
+    }
+    /**
+     * `sidebar.session.action` 的占位者：官方「新建会话」按钮 + 本行。
+     *
+     * 为什么要有它（0.6.2 的修复）：官方把面板列表放在侧栏的滚动视口**里**（官方源码注释：
+     * 展开态视口滚动时「只滚走导航」），所以注册在 `sidebar.panellist` 里的本行会跟着滚上去，
+     * 而「新建会话」在视口之外不动——两者行为不可能被拉平。要让它们一致，只能离开视口：
+     * 宿主给「新建会话」那一行开了 HOC 槽位 `sidebar.session.action`，占位者拿到官方按钮本身
+     * （`{children}`）与 `wide`，由占位者决定这一行的组成。本组件把官方按钮原样包一层、再在
+     * 后面追加本行，于是两者是同一个 row 里的兄弟节点，滚动侧栏时按同一套规则不动。
+     *
+     * 为什么按**槽位是否存在**判定，而不是按宿主版本号：同一个 `0.2.2-rc.1` 的两个桌面构建里，
+     * 一个有这个槽位、一个没有（实测）。版本号分不出来，槽位在不在却分得出来。
+     *
+     * 几个刻意的选择：
+     *   - **不克隆、不改官方按钮**：它是宿主的控件，属性、快捷键提示、埋点都归宿主。
+     *   - 官方按钮放在**先**（上），本行在后（下）：顺序就是同类控件的先后顺序。
+     *   - 收起的窄栏（`wide === false`）照样画本行：否则 56px 窄栏里这个入口会整个消失
+     *     （挂法一里它本来就在面板列表里，窄栏也画）。
+     *   - 槽位里拿不到 `children`（宿主以后改了约定）时只画本行，绝不因此一片空白。
+     */
+    function SessionActionRow(props) {
+        const { runtime, tray } = props;
+        const wide = props.wide !== false;
+        const canOpenPath = typeof props.canOpenPath === 'boolean' ? { canOpenPath: props.canOpenPath } : {};
+        const row = (rail) => React.createElement(TemptaskRow, {
+            runtime,
+            tray,
+            placement: 'sessionAction',
+            rail,
+            ...(rail ? { size: 18 } : {}),
+            ...canOpenPath,
+        });
+        const shell = ['__tt_sessionAction', wide ? '' : '__tt_sessionActionRail']
+            .filter(Boolean)
+            .join(' ');
+        if (props.children === undefined || props.children === null) {
+            return React.createElement('div', { className: `${shell} __tt_sessionActionOnly` }, row(!wide));
+        }
+        return React.createElement('div', { className: shell }, props.children, row(!wide));
     }
     function TemptaskTray(props) {
         const { runtime, tray } = props;
@@ -2003,26 +2097,74 @@ window.__ModuleLoader__.load({
                 return null;
             }
             /**
-             * 侧边栏那一行：官方负责行的外观与 tooltip，本行自己画内容（要"标签在左、按钮在右"）。
+             * 侧栏入口的**唯一性守卫**。
              *
-             * `order` 为什么是负数：0.1.7-rc.2 起官方 Web 端自己往 `sidebar.panellist` 注册了一个
-             * 「插件」面板行（`id: "plugins"`、`order: 0`、图标是风车，见官方 `PluginsPanelIcon`）。
-             * 面板列表按 `order` **升序**渲染，取 10 时那行「插件」会永远压在本行上面，
-             * 本行就贴不到「新建会话」正下方；取负值才能排到它前面。
-             * 也不要用 0：并列名次只能靠 `Array.prototype.sort` 的稳定性决定先后，太脆。
+             * 两种挂法不能同时生效——两份都画就是两条「临时任务」，用户会当场看到重复。
+             * 但「哪个槽位被声明了」在 apply 时还读不到（声明来自别的客户端插件，顺序不保证），
+             * 所以这里靠 `slots.inject` 的回调时机定序：
+             *
+             *   - 顶部那一行的槽位一旦被声明 → 记下来，并**立刻注销**已经登记的面板行；
+             *   - 面板行的槽位在被声明时先看这个记号：已经有人接管就什么都不注册。
+             *
+             * 两种声明顺序都收敛到「只留一个」：先顶部后面板 → 面板根本不注册；先面板后顶部 →
+             * 面板注册后被注销。注销发生在宿主组装阶段（首帧之前），所以不会看到两行同时闪一下。
              */
-            slots.inject('sidebar.panellist', () => slots.register({ name: 'sidebar.panellist', id: NS, order: -100, label: () => t('nav'), locale: NS }, (raw) => {
-                const injected = raw;
-                return React.createElement(TemptaskRow, {
-                    runtime: isRuntime(injected.runtime) ? injected.runtime : runtime,
-                    tray: isTray(injected.tray) ? injected.tray : tray,
-                    ...(typeof injected.size === 'number' ? { size: injected.size } : {}),
-                    // 官方只会传 size/active；这一项留给离线渲染自测注入（生产环境由组件自己问 /state）
-                    ...(typeof injected.canOpenPath === 'boolean'
-                        ? { canOpenPath: injected.canOpenPath }
-                        : {}),
+            let topRowOwnsEntry = false;
+            let disposePanelRow;
+            /**
+             * 顶部那一行的槽位（HOC）。
+             *
+             * 占位者由宿主传入 `{ wide, children }`（children = 官方「新建会话」按钮），
+             * 本行与它在同一行里，见 `SessionActionRow`。宿主没有这个槽位时 inject 永不触发，
+             * 本插件就只用下面那种挂法，不报错也不会两处都画。
+             */
+            slots.inject('sidebar.session.action', () => {
+                topRowOwnsEntry = true;
+                disposePanelRow?.();
+                disposePanelRow = undefined;
+                return slots.register({ name: 'sidebar.session.action', id: NS, label: () => t('nav'), locale: NS }, (raw) => {
+                    const injected = raw;
+                    return React.createElement(SessionActionRow, {
+                        runtime: isRuntime(injected.runtime) ? injected.runtime : runtime,
+                        tray: isTray(injected.tray) ? injected.tray : tray,
+                        ...(typeof injected.wide === 'boolean' ? { wide: injected.wide } : {}),
+                        ...(injected.children !== undefined && injected.children !== null
+                            ? { children: injected.children }
+                            : {}),
+                        ...(typeof injected.canOpenPath === 'boolean'
+                            ? { canOpenPath: injected.canOpenPath }
+                            : {}),
+                    });
                 });
-            }));
+            });
+            /**
+             * 退路：面板列表里的一行。只在宿主没有 `sidebar.session.action` 时使用。
+             *
+             * 这条挂法**修不彻底**（面板列表在侧栏的滚动视口里，向下滚动会被推上去），
+             * 留着它是因为不能因为宿主少一个槽位就让整个入口消失。
+             *
+             * `order` 取 0：它不再是「排第几」的问题——顶部挂法才是常态，这里只是退路，
+             * 负数只会影响「更多」菜单里的排序，没必要为此保留一个反直觉的取值。
+             */
+            slots.inject('sidebar.panellist', () => {
+                if (topRowOwnsEntry)
+                    return undefined;
+                const dispose = slots.register({ name: 'sidebar.panellist', id: NS, order: 0, label: () => t('nav'), locale: NS }, (raw) => {
+                    const injected = raw;
+                    return React.createElement(TemptaskRow, {
+                        placement: 'panel',
+                        runtime: isRuntime(injected.runtime) ? injected.runtime : runtime,
+                        tray: isTray(injected.tray) ? injected.tray : tray,
+                        ...(typeof injected.size === 'number' ? { size: injected.size } : {}),
+                        // 官方只会传 size/active；这一项留给离线渲染自测注入（生产环境由组件自己问 /state）
+                        ...(typeof injected.canOpenPath === 'boolean'
+                            ? { canOpenPath: injected.canOpenPath }
+                            : {}),
+                    });
+                });
+                disposePanelRow = dispose;
+                return dispose;
+            });
             // 该行在官方语义里指向一个面板；这里给一个"空面板 + 立刻返回会话"的兜底。
             slots.inject('main', () => slots.register({ name: 'main', key: NS }, () => React.createElement(MainPanelBackstop)));
             // 浮层：说明气泡 / 清理确认框 / 齿轮设置 / 转正面板 / 失败提示 + 消费 pendingOpen 的常驻守护
@@ -2119,6 +2261,7 @@ window.__ModuleLoader__.load({
             EN,
             TaskIcon,
             TemptaskRow,
+            SessionActionRow,
             TemptaskTray,
             TaskSettingsPanel,
             CleanDialog,

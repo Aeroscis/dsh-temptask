@@ -136,8 +136,14 @@ function createClientStub({
   const configFormWrites = [];
   const slots = {
     register(options, component) {
-      registrations.push({ options, component });
-      return () => {};
+      const entry = { options, component, disposed: false };
+      registrations.push(entry);
+      // 真实的 register 返回注销函数；照实做，才能验「两种挂法只留一个」。
+      return () => {
+        entry.disposed = true;
+        const at = registrations.indexOf(entry);
+        if (at >= 0) registrations.splice(at, 1);
+      };
     },
     inject(_key, callback) {
       callback();
@@ -213,6 +219,24 @@ function createClientStub({
 const { ctx, registrations } = createClientStub();
 plugin.apply(ctx);
 
+/**
+ * 退路宿主：不声明 `sidebar.session.action`（两侧桌面版里都有这样的构建，实测）。
+ * 面板列表挂法的渲染测试全都对着它，因为在正常宿主上那一行根本不会被注册。
+ */
+const fallbackHost = createClientStub();
+fallbackHost.ctx.get('slots').inject = (key, callback) => {
+  if (key !== 'sidebar.session.action') callback();
+  return () => {};
+};
+plugin.apply(fallbackHost.ctx);
+const fallbackRow = () => {
+  const entry = fallbackHost.registrations.find(
+    (item) => item.options.name === 'sidebar.panellist',
+  );
+  assert.ok(entry !== undefined, '退路宿主上必须注册面板列表那一行');
+  return entry;
+};
+
 function entriesOf(name) {
   return registrations.filter((item) => item.options.name === name);
 }
@@ -229,11 +253,13 @@ function overlayOf(id) {
   return entry;
 }
 
-check('apply 注册：侧边栏那一行 / 兜底空面板 / 浮层 ×2 / 官方会话行槽位 ×2 / 设置卡片与它的图标', () => {
+check('apply 注册：入口一行（顶部挂法）/ 兜底空面板 / 浮层 ×2 / 官方会话行槽位 ×2 / 设置卡片与它的图标', () => {
   assert.deepEqual(
     registrations.map((item) => item.options.name),
     [
-      'sidebar.panellist',
+      // 这个桩把宿主声明表全挂上（含 sidebar.session.action），因此只能出现顶部挂法：
+      // 面板列表那条退路会被守卫跳过或当场注销，两条都画就是两行「临时任务」。
+      'sidebar.session.action',
       'main',
       'shell.overlay',
       'shell.overlay',
@@ -245,26 +271,63 @@ check('apply 注册：侧边栏那一行 / 兜底空面板 / 浮层 ×2 / 官方
       'settings.section.icon',
     ],
   );
-  assert.equal(entryOf('sidebar.panellist').options.id, 'dsh-temptask');
+  assert.equal(entryOf('sidebar.session.action').options.id, 'dsh-temptask');
   assert.equal(entryOf('main').options.key, 'dsh-temptask', '面板行的 id 必须与 main 的 key 同名');
   assert.ok(overlayOf('dsh-temptask-tray') !== undefined);
   assert.ok(overlayOf('dsh-temptask-pending-open') !== undefined);
 });
 
-check('面板行的 order 取负值：排到官方「插件」面板行（order 0）前面，紧贴「新建会话」', () => {
-  const order = entryOf('sidebar.panellist').options.order;
-  assert.equal(typeof order, 'number', 'order 必须显式给出：官方按它升序渲染面板列表');
+check('两种挂法只留一个：声明顺序反过来（先面板列表、后顶部那一行）也不会双份', () => {
+  const late = createClientStub();
+  const stub = late.ctx.get('slots');
+  const realInject = stub.inject;
+  // 模拟「面板列表先声明、顶部那一行晚一步声明」的宿主：两次回调都到，但顺序倒过来
+  let topCallback;
+  stub.inject = (key, callback) => {
+    if (key === 'sidebar.session.action') {
+      topCallback = callback;
+      return () => {};
+    }
+    return realInject(key, callback);
+  };
+  plugin.apply(late.ctx);
+  assert.equal(
+    late.registrations.some((item) => item.options.name === 'sidebar.panellist'),
+    true,
+    '顶部那一行还没声明时，先按退路挂进面板列表',
+  );
+  topCallback();
+  const names = late.registrations.map((item) => item.options.name);
+  assert.equal(names.filter((name) => name === 'sidebar.panellist').length, 0, '退路必须被注销');
+  assert.equal(names.filter((name) => name === 'sidebar.session.action').length, 1);
+});
+
+check('宿主没有 sidebar.session.action 时退回面板列表，order 为 0', () => {
+  const other = createClientStub();
+  // 真实的 slots.inject 只在槽位已声明时执行回调——这里模拟没有顶部那一行的宿主
+  other.ctx.get('slots').inject = (key, callback) => {
+    if (key !== 'sidebar.session.action') callback();
+    return () => {};
+  };
+  plugin.apply(other.ctx);
+  const names = other.registrations.map((item) => item.options.name);
+  assert.equal(names.includes('sidebar.session.action'), false, '没声明的槽位不该被注册');
+  assert.equal(names.includes('sidebar.panellist'), true, '这种宿主上必须退回面板列表挂法');
+  const fallback = other.registrations.find((item) => item.options.name === 'sidebar.panellist');
+  assert.equal(fallback.options.order, 0);
+  assert.equal(fallback.options.id, 'dsh-temptask');
+  // 退路那一行仍走面板行的老形状：按 size 判宽窄，ID 与 main 面板同名。
   assert.ok(
-    order < 0,
-    `order 必须 < 0：0.1.7 起官方自己注册了「插件」面板行（id "plugins"、order 0），` +
-      `取正数就会被它压在上面，本行贴不到「新建会话」正下方（当前 ${order}）`,
+    render(fallback.component, { size: 16, active: false }).includes('__tt_rowWideFallback'),
+    '面板列表挂法要带自己的边距类（顶部挂法那套几何在这里不适用）',
   );
 });
 
+
 check('那一行的 label 是 i18n thunk：切换语言后再取必须跟着变', () => {
-  const label = entryOf('sidebar.panellist').options.label;
+  const label = entryOf('sidebar.session.action').options.label;
   assert.equal(typeof label, 'function', 'label 必须是 thunk');
-  assert.equal(entryOf('sidebar.panellist').options.locale, 'dsh-temptask');
+  assert.equal(entryOf('sidebar.session.action').options.locale, 'dsh-temptask');
   assert.equal(label(), '临时任务');
   activeLocale = 'en';
   assert.equal(label(), 'Temporary tasks');
@@ -318,8 +381,52 @@ const runtime = {
   notice: () => {},
 };
 
+check('顶部那一行：官方「新建会话」按钮原样包住，本行跟在后面（同一行 → 滚动行为一致）', () => {
+  const occupant = entryOf('sidebar.session.action').component;
+  const officialButton = React.createElement('button', { type: 'button' }, '新会话');
+  const markup = render(occupant, {
+    wide: true,
+    children: officialButton,
+    runtime,
+    tray: internals.createTray(),
+  });
+  assert.ok(markup.includes('__tt_sessionAction'), '必须带顶部那一行的外壳类');
+  assert.ok(markup.includes('新会话'), '官方的「新建会话」按钮必须原样保留');
+  assert.ok(markup.includes('临时任务'), '本行的标签必须跟着出现');
+  assert.ok(markup.includes('__tt_rowWide'), '宽栏：本行用与「新建会话」同一套按钮外观');
+  assert.ok(
+    markup.includes('role="button"'),
+    '主区（整块可点 = 新建临时任务）必须存在',
+  );
+  // 顺序：官方按钮在前，本行在后（同类控件按先后排列）
+  assert.ok(
+    markup.indexOf('新会话') < markup.indexOf('临时任务'),
+    '本行必须排在「新建会话」按钮后面',
+  );
+});
+
+check('顶部那一行：窄栏也画本行（否则窄栏里这个入口会整个消失）', () => {
+  const occupant = entryOf('sidebar.session.action').component;
+  const markup = render(occupant, {
+    wide: false,
+    children: React.createElement('button', { type: 'button' }, '新会话'),
+    runtime,
+    tray: internals.createTray(),
+  });
+  assert.ok(markup.includes('临时任务'), '窄栏里也要有本行（只画图标）');
+  assert.ok(markup.includes('__tt_sessionActionRail'), '窄栏要带自己的几何类（36px 圆形入口）');
+  assert.equal(markup.includes('__tt_rowActions'), false, '窄栏不画右侧的五个小按钮');
+});
+
+check('顶部那一行：槽位没给 children 时只画本行，不报错也不空白', () => {
+  const occupant = entryOf('sidebar.session.action').component;
+  const markup = render(occupant, { wide: true, runtime, tray: internals.createTray() });
+  assert.ok(markup.includes('__tt_sessionActionOnly'));
+  assert.ok(markup.includes('临时任务'));
+});
+
 check('宽栏那一行：主区整块可点=新建 + 右侧五个次要按钮，字形全部自绘', () => {
-  const row = entryOf('sidebar.panellist').component;
+  const row = fallbackRow().component;
   const markup = render(row, { size: 16, active: false });
 
   // 本行自己画标签文字；官方 PanelRow 会把注册的 label 再渲染一次标题，那一次发生在官方
@@ -402,7 +509,7 @@ check('构建产物里带着「只在本行隐藏官方 title」的样式（防�
     '必须把官方 .panelGlyph 改成可伸展：它默认 flex:none，会让整行不随侧边栏宽度缩放',
   );
   assert.ok(
-    entryOf('sidebar.panellist').options.label().length > 0,
+    fallbackRow().options.label().length > 0,
     'label 必须非空：官方用它做 tooltip 与无障碍名（可见文字由本行自己渲染）',
   );
 });
@@ -428,7 +535,7 @@ check('宿主图标包改名的回归：产物里不再 require 它', () => {
 });
 
 check('自绘字形不依赖任何外部资源：每个按钮都渲染出内联 svg', () => {
-  const row = entryOf('sidebar.panellist').component;
+  const row = fallbackRow().component;
   const markup = render(row, { size: 16, active: false });
   // 主区 1 枚 + 次要动作 5 枚 = 6 枚自绘 svg（图标是 data-tt-icon / data-tt-mark 标记的）
   const glyphs = (markup.match(/data-tt-(?:icon|mark)=/gu) ?? []).length;
@@ -438,7 +545,7 @@ check('自绘字形不依赖任何外部资源：每个按钮都渲染出内联 
 });
 
 check('窄栏那一行：只留主区图标（无文字、无次要按钮）', () => {
-  const row = entryOf('sidebar.panellist').component;
+  const row = fallbackRow().component;
   const markup = render(row, { size: 18, active: true });
   assert.ok(markup.includes('<svg'), markup);
   assert.ok(markup.includes('__tt_primary'), '窄栏要保留主区——36×36 的那块就是"新建"');
@@ -648,7 +755,7 @@ check('第三号按钮：能打开文件夹就「打开根目录」，否则退�
   assert.equal(decide(false), 'copy');
   assert.equal(decide(undefined), 'copy', '能力未知时按复制渲染（SSR / 老宿主都安全）');
 
-  const row = entryOf('sidebar.panellist').component;
+  const row = fallbackRow().component;
   const openable = render(row, { size: 16, active: false, canOpenPath: true });
   assert.ok(openable.includes('aria-label="打开任务根目录"'), openable);
   assert.ok(openable.includes('data-tt-icon="open"'), '打开用自绘的"外部打开"箭头');
@@ -721,7 +828,7 @@ check('设置页导航图标：与侧边栏那一行同一枚自绘标记，size
   assert.ok(render(entryOf('settings.section.icon').component, {}).includes('width="16"'));
 });
 
-check('配置通道缺失时也注册 8 个插槽：设置卡片与转正入口改走插件自己的 HTTP 接口', () => {
+check('配置通道缺失时也注册全部插槽：设置卡片与转正入口改走插件自己的 HTTP 接口', () => {
   const bare = createClientStub({
     withSettings: false,
     withConfigForms: false,
@@ -731,7 +838,7 @@ check('配置通道缺失时也注册 8 个插槽：设置卡片与转正入口�
   assert.deepEqual(
     bare.registrations.map((item) => item.options.name),
     [
-      'sidebar.panellist',
+      'sidebar.session.action',
       'main',
       'shell.overlay',
       'shell.overlay',
@@ -826,7 +933,7 @@ await checkAsync('ConfigForm 被拒（false）时抛错，并回退到插件自�
 check('locale 服务缺失时那一行仍给中文（回落到自带词典，不 500）', () => {
   const bare = createClientStub({ withLocale: false });
   plugin.apply(bare.ctx);
-  const entry = bare.registrations.find((item) => item.options.name === 'sidebar.panellist');
+  const entry = bare.registrations.find((item) => item.options.name === 'sidebar.session.action');
   assert.ok(entry !== undefined);
   assert.equal(entry.options.label(), '临时任务');
 });
@@ -1517,3 +1624,4 @@ check('ZH / EN 两个词典 key 完全对齐（漏一条就是半截中文半截
 });
 
 console.log(`\n✅ client 全部 ${passed} 项通过`);
+

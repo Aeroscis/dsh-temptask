@@ -131,6 +131,7 @@
     ],
     "slots": [
       "sidebar.panellist",
+      "sidebar.session.action",
       "main",
       "shell.overlay",
       "sidebar.workspaces.session.menu.item",

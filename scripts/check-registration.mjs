@@ -247,13 +247,32 @@ try {
     const clientPath = join(modulesRoot, '@deepseek-ai', pkgName, 'lib', 'client.js');
     if (!existsSync(clientPath)) continue;
     const source = await readFile(clientPath, 'utf8');
-    for (const match of source.matchAll(/"([a-zA-Z][\w.]*)":\s*\{\s*kind:\s*"([a-z]+)",\s*scope:\s*"([a-z-]+)"/gu)) {
+    /*
+     * 声明写成 `"<名字>": { kind: "<kind>", scope: "<scope>" }`，但**引号字符随构建而变**：
+     * 有的宿主产物用双引号，有的把**值**换成反引号（实测 0.2.2-rc.1 的两个桌面版构建就不一样）。
+     * 只认双引号时，扫描会一整个漏掉声明包——声明表变空 → 所有 inject 都不触发 →
+     * 断言拿到"只注册了两个槽位"这种假失败，而插件其实没错。所以两种引号都认。
+     */
+    for (const match of source.matchAll(
+      /["`]([a-zA-Z][\w.]*)["`]:\s*\{\s*kind:\s*["`]([a-z]+)["`],\s*scope:\s*["`]([a-z-]+)["`]/gu,
+    )) {
       const [, name, kind, scope] = match;
       // 官方声明里 default 顺序固定为 kind 然后 scope；inline 之类的附加字段不影响判定，
       // 这里只按 kind/scope 建表（SlotCore 的 register 也只校验这两项）。
       declarations ??= new Map();
       if (!declarations.has(name)) declarations.set(name, { kind, scope });
     }
+  }
+  /*
+   * 扫描失败必须当场说出来，不能静默变成"宿主没有这个槽位"：
+   * 后者会让下面每一条 inject 都不执行，于是断言以"注册清单变了"的形式误报。
+   * `sidebar` 这个槽位从最早支持的那版起就存在，拿它当扫描是否有效的探针。
+   */
+  if (declarations !== undefined && !declarations.has('sidebar')) {
+    throw new Error(
+      `槽位声明扫描没有读到任何已知声明（扫出 ${declarations.size} 条）：` +
+        '宿主产物的字面量形态可能又变了，先修这个正则，别把结果当成"槽位不存在"',
+    );
   }
   const slotsUrl = new URL(
     hostUrl.replace('dsh-client-modules/lib/client.js', 'dsh-client-ui-slots/lib/index.js'),
@@ -310,10 +329,14 @@ if (slotCore === undefined || declarations === undefined) {
   check(`宿主声明表接受本插件注册的全部槽位（${registered.length} 项）`, () => {
     assert.equal(applyError, undefined, `apply 抛错：${applyError?.message}`);
     assert.deepEqual(failures, [], `宿主没声明这些槽位：\n  ${failures.join('\n  ')}`);
-    // 老宿主没有 settings.section.icon（0.2.2 才声明），所以这一项允许缺席；
-    // 其余七项在每个受支持的宿主上都必须注册成功。
+    // 两个槽位按宿主构建可能缺席，其余每一项在每个受支持的宿主上都必须注册成功：
+    //   - settings.section.icon：0.2.2 才声明；
+    //   - sidebar.session.action：侧栏顶部那一行（**按声明判定，不按版本号**——同为
+    //     0.2.2-rc.1 的两个桌面构建，一个有这个槽位、一个没有，实测）。
+    // 入口那一行本身**二选一**：有顶部槽位就只挂顶部，没有才退回面板列表。
+    const hasTopRow = declarations.has('sidebar.session.action');
     const expected = [
-      'sidebar.panellist',
+      ...(hasTopRow ? ['sidebar.session.action'] : ['sidebar.panellist']),
       'main',
       'shell.overlay',
       'shell.overlay',
@@ -323,6 +346,21 @@ if (slotCore === undefined || declarations === undefined) {
       ...(declarations.has('settings.section.icon') ? ['settings.section.icon'] : []),
     ];
     assert.deepEqual(registered, expected, '注册的槽位清单变了');
+    // 双份就是把两条「临时任务」摆在用户眼前，这条判据钉死它。
+    assert.equal(
+      registered.includes('sidebar.panellist') && registered.includes('sidebar.session.action'),
+      false,
+      '入口一行只能注册一次：两种挂法同时生效会出现两条「临时任务」',
+    );
+    // 新挂法用的是 HOC 槽位：它不是导航，注册进去也只是「包住官方按钮」；kind 写错宿主会当场抛错，
+    // 所以这里额外把 kind 钉住，免得哪天谱子改了却没人发现。
+    if (hasTopRow) {
+      assert.equal(
+        declarations.get('sidebar.session.action').kind,
+        'hoc',
+        'sidebar.session.action 应当是 HOC 槽位（占位者包住官方「新建会话」按钮）',
+      );
+    }
   });
 
 }
