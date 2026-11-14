@@ -35,6 +35,8 @@
  *   3. **不要把它挪回面板列表**：官方面板列表在侧栏的滚动视口里，向下滚动时会被推上去，
  *      而官方「新建会话」在视口外不动（官方源码：展开态滚动「只滚走导航」）。用户实测
  *      指出过两者滚动行为不一致——这就是 0.6.2 改成挂 `sidebar.session.action` 的原因。
+ *   4. **本行子树必须自己声明 `box-sizing:border-box`**：宿主没有全局复位，浏览器默认
+ *      content-box，带 padding 的主区会算出比行更高的盒子（0.6.2 的悬停底色漫出事故）。
  *
  * 与 host 的唯一数据通道是 `fetch("/dsh-temptask/api/*")`，见 src/routes.ts。
  */
@@ -334,10 +336,20 @@ const EN: Record<string, string> = {
 const CSS = [
   // 侧边栏那一行：官方行是 flex + padding 7px 8px；这里让标签在左、按钮在右。
   '.__tt_row{display:flex;align-items:center;gap:8px;width:100%;min-width:0}',
+  /*
+   * 本行子树**一律 border-box**。
+   *
+   * 宿主没有全局 `box-sizing` 复位（它只在具体控件上写），浏览器默认是 content-box。
+   * 主区带 `height:100%` + 上下 7px 内边距：content-box 下 36+14 实际画出 **50px**，
+   * 比 38px 的行高出 12px，悬停底色就从行里漫出去、在分隔线处切一刀（用户截图指出）。
+   * 加复位之后主区就是 36，正好填满行的内容盒。
+   */
+  '.__tt_row,.__tt_row *{box-sizing:border-box}',
   // 宽栏这一行沿用官方「新建会话」按钮的规格（边框 + elevated 底色），避免与侧边栏背景混成一片。
   // 取值逐条抄自官方 .EXfQ3q_newSession：.5px border-l3 + button-elevated-fill + r12 + h38 + padding 8/16。
   // margin 归外壳管（两种挂法各有一套，见下面两段），这里只管按钮自己的盒子。
-  '.__tt_rowWide{box-sizing:border-box;min-height:38px;padding:0;gap:0;margin:0;border:.5px solid var(--dsw-alias-border-l3);border-radius:12px;background:var(--dsw-alias-button-elevated-fill)}',
+  // overflow:hidden 是第二道保险：无论因子项尺寸出什么意外，底色都不许画出圆角边框之外。
+  '.__tt_rowWide{box-sizing:border-box;min-height:38px;padding:0;gap:0;margin:0;border:.5px solid var(--dsw-alias-border-l3);border-radius:12px;background:var(--dsw-alias-button-elevated-fill);overflow:hidden}',
   '.__tt_rowWide:hover{background:var(--dsw-alias-button-floating-hover)}',
   /*
    * 挂法一（宿主没有 `sidebar.session.action` 槽位时）：

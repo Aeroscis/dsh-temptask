@@ -508,6 +508,19 @@ check('构建产物里带着「只在本行隐藏官方 title」的样式（防�
     bundleSource.includes('panelGlyph') && bundleSource.includes('flex:1 1 auto'),
     '必须把官方 .panelGlyph 改成可伸展：它默认 flex:none，会让整行不随侧边栏宽度缩放',
   );
+  /*
+   * 回归：宿主没有全局 box-sizing 复位，浏览器默认 content-box。主区带 height:100% 加
+   * 上下 7px 内边距时，content-box 会画出 50px（行只有 38px），悬停底色漫出圆角边框。
+   * 这两条样式是那个事故的修复，缺一条就会复发。
+   */
+  assert.ok(
+    bundleSource.includes('.__tt_row,.__tt_row *{box-sizing:border-box}'),
+    '本行子树必须有 border-box 复位：否则带 padding 的主区会比行更高',
+  );
+  assert.ok(
+    /__tt_rowWide\{[^}]*overflow:hidden/u.test(bundleSource),
+    '宽栏那一行要 overflow:hidden：任何子项尺寸意外都不许把底色画出圆角边框',
+  );
   assert.ok(
     fallbackRow().options.label().length > 0,
     'label 必须非空：官方用它做 tooltip 与无障碍名（可见文字由本行自己渲染）',
