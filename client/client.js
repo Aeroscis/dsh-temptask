@@ -377,7 +377,7 @@ window.__ModuleLoader__.load({
         '[class*="panelRow"]:has(.__tt_row):hover{background:transparent}',
         // 主区（整块可点 = 新建）+ 右侧次要动作区（竖线分隔）
         '.__tt_primary{display:flex;align-items:center;gap:8px;flex:1;min-width:0;height:100%;padding:8px 12px;border-radius:11px 0 0 11px;color:var(--dsw-alias-label-primary);font-size:14px;line-height:22px;font-weight:500;cursor:pointer}',
-        '.__tt_primary:hover:not(.__tt_primaryBusy){background:var(--dsw-alias-interactive-bg-hover)}',
+        '.__tt_primary:hover:not(.__tt_primaryBusy){background:var(--dsw-alias-button-floating-hover)}',
         '.__tt_primary:focus-visible{outline:2px solid var(--dsw-alias-label-primary);outline-offset:-2px}',
         '.__tt_primaryBusy{cursor:default;color:var(--dsw-alias-label-tertiary)}',
         '.__tt_primaryRail{justify-content:center;padding:0}',
