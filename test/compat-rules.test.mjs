@@ -296,13 +296,13 @@ const BEFORE = {
 }
 
 check('完全一致 → 没有差异', () => {
-  assert.deepEqual(diffSurface(BEFORE, structuredClone(BEFORE)), [])
+  assert.deepEqual(diffSurface(BEFORE, structuredClone(BEFORE)), { changes: [], versionOnly: [] })
 })
 
 check('方法缺失 → 差异行说明缺了哪个方法', () => {
   const after = structuredClone(BEFORE)
   after.hostServices.workspaceRegistry.missingMembers = ['insertBefore']
-  const changes = diffSurface(BEFORE, after)
+  const { changes } = diffSurface(BEFORE, after)
   assert.equal(changes.length, 1)
   assert.match(changes[0], /insertBefore/)
 })
@@ -310,7 +310,7 @@ check('方法缺失 → 差异行说明缺了哪个方法', () => {
 check('插槽 scope 变了 → 差异行同时给出前后值', () => {
   const after = structuredClone(BEFORE)
   after.slots['shell.overlay'].scope = 'pane'
-  const changes = diffSurface(BEFORE, after)
+  const { changes } = diffSurface(BEFORE, after)
   assert.equal(changes.length, 1)
   assert.match(changes[0], /scope=pane/)
   assert.match(changes[0], /scope=root/)
@@ -319,9 +319,28 @@ check('插槽 scope 变了 → 差异行同时给出前后值', () => {
 check('新增一个包 → 差异行标为新增', () => {
   const after = structuredClone(BEFORE)
   after.packages['@deepseek-ai/dsh-new'] = { present: true, version: '0.2.2-rc.1', entry: true }
-  const changes = diffSurface(BEFORE, after)
+  const { changes } = diffSurface(BEFORE, after)
   assert.equal(changes.length, 1)
   assert.match(changes[0], /新增/)
+})
+
+check('只有包版本号变了 → 不算接口差异，单独记在 versionOnly', () => {
+  const after = structuredClone(BEFORE)
+  after.packages['@deepseek-ai/dsh-workspace'].version = '0.2.2-rc.3'
+  const { changes, versionOnly } = diffSurface(BEFORE, after)
+  assert.deepEqual(changes, [], '版本号变化不该让整次检查变成 DRIFT')
+  assert.equal(versionOnly.length, 1)
+  assert.match(versionOnly[0], /0\.2\.2-rc\.1 → v0\.2\.2-rc\.3/)
+})
+
+check('包版本号变了但入口文件消失 → 仍算接口差异', () => {
+  const after = structuredClone(BEFORE)
+  after.packages['@deepseek-ai/dsh-workspace'].version = '0.2.2-rc.3'
+  after.packages['@deepseek-ai/dsh-workspace'].entry = false
+  const { changes, versionOnly } = diffSurface(BEFORE, after)
+  assert.equal(versionOnly.length, 0)
+  assert.equal(changes.length, 1)
+  assert.match(changes[0], /入口文件缺失/)
 })
 
 check('版本越界优先于表面变化', () => {

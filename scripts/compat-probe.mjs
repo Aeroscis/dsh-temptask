@@ -517,8 +517,22 @@ function declarationsIn(node, instances, nameOfClass) {
   return found
 }
 
-const stringLiteral = (node) =>
-  node?.type === 'Literal' && typeof node.value === 'string' ? node.value : undefined
+/**
+ * 读出一个字符串字面量的值。
+ *
+ * 必须同时认反引号：宿主从 0.2.2-rc.3 起把客户端产物压成单行，字符串字面量改用模板字面量
+ * 写（`super(ctx, \`slots\`)`）。只认单双引号时这些声明会被整片漏掉，表现为一堆服务
+ * 「未提供」——那是探针的盲区，不是宿主变了。
+ *
+ * 带插值的模板（`${x}` 那种）不算字面量：它的值运行期才知道。
+ */
+const stringLiteral = (node) => {
+  if (node?.type === 'Literal' && typeof node.value === 'string') return node.value
+  if (node?.type === 'TemplateLiteral' && node.expressions.length === 0) {
+    return node.quasis.map((quasi) => quasi.value.cooked ?? quasi.value.raw).join('')
+  }
+  return undefined
+}
 
 /**
  * 读取类的实例成员名。静态成员不算：调用方拿到的是实例，static 上的方法调不到。
@@ -543,11 +557,17 @@ function classBodyMembers(classNode) {
 /**
  * 每个插槽在声明它的客户端包里写成 "<名字>": { kind, scope } 的字面量。
  * 这里把宿主产物里所有这种形状都收进来，不限定声明方是哪个包。
+ *
+ * 引号有讲究：0.2.2-rc.1 及更早用单双引号，0.2.2-rc.3 起压成单行后改用反引号。
+ * 三种都认，否则新一代宿主上所有插槽都会被判成「未声明」。
  */
 function scanSlots(host) {
   const slots = new Map()
-  const pattern =
-    /["']([A-Za-z][\w.]*)["']\s*:\s*\{\s*kind:\s*["']([a-z]+)["']\s*,\s*scope:\s*["']([a-zA-Z-]+)["']/g
+  const q = '["\'`]'
+  const pattern = new RegExp(
+    `${q}([A-Za-z][\\w.]*)${q}\\s*:\\s*\\{\\s*kind\\s*:\\s*${q}([a-z]+)${q}\\s*,\\s*scope\\s*:\\s*${q}([a-zA-Z-]+)${q}`,
+    'g',
+  )
 
   for (const file of host.indices) {
     const match = BUNDLE_PATTERN.exec(file)
@@ -723,7 +743,8 @@ async function main() {
   const baseline = fs.existsSync(BASELINE_FILE)
     ? JSON.parse(fs.readFileSync(BASELINE_FILE, 'utf8'))
     : undefined
-  const changes = baseline === undefined ? [] : diffSurface(baseline.surface, surface)
+  const { changes, versionOnly } =
+    baseline === undefined ? { changes: [], versionOnly: [] } : diffSurface(baseline.surface, surface)
 
   const verdict = decide({ range, baseline, changes })
 
@@ -734,6 +755,7 @@ async function main() {
     range,
     baseline: baseline === undefined ? undefined : { runtime: baseline.runtime, recordedAt: baseline.recordedAt },
     changes,
+    versionOnly,
     parseFailures,
     surface,
   }
@@ -798,11 +820,21 @@ function finish(result, exitCode) {
     }
   }
 
+  // 只有版本号变了时说明一句：宿主换了但接口没换，参照里记的是哪个宿主照旧有效。
+  const versionNote =
+    result.versionOnly?.length > 0
+      ? `\n宿主版本变了（${result.baseline.runtime} → ${result.runtime.version}），接口表面未变。` +
+        `\n  ${result.versionOnly.length} 个包的版本号跟着变，不影响兼容性；确认插件在这个宿主上好用后，` +
+        '可运行 --write-baseline 把参照推进到新版本。'
+      : ''
+
   if (result.verdict === 'UNCHANGED') {
     console.log(`\nUNCHANGED  接口表面与参照记录一致（参照宿主 ${result.baseline.runtime}）`)
+    if (versionNote.length > 0) console.log(versionNote)
   } else if (result.verdict === 'DRIFT') {
     console.log(`\nDRIFT  接口表面变了（参照宿主 ${result.baseline.runtime}）：`)
     for (const change of result.changes) console.log(`  - ${change}`)
+    if (versionNote.length > 0) console.log(versionNote)
     console.log('\n处理方法见 skill dsh-plugin-compat。')
   } else if (result.verdict === 'OUT-OF-RANGE') {
     console.log('\nOUT-OF-RANGE  宿主会拒绝装载本插件，必须先适配：')

@@ -132,9 +132,16 @@ export function observeSlots(names, declarations) {
   return observed
 }
 
-/** 逐项比对两份观察记录，返回人可读的差异行。顺序稳定，便于比对输出。 */
+/**
+ * 逐项比对两份观察记录，返回人可读的差异行。顺序稳定，便于比对输出。
+ *
+ * 只看包的版本号变了（`present`/`entry` 都一样）不算接口变化：包版本随宿主每次发版都动，
+ * 把它算成差异会让每一次宿主升级都报 DRIFT，人就学会忽略结论了——那等于没有检查。
+ * 这类差异单独记在 `versionOnly` 里，供输出时说明「宿主换了，接口没换」。
+ */
 export function diffSurface(before, after) {
   const changes = []
+  const versionOnly = []
   for (const group of ['hostServices', 'clientServices', 'slots', 'packages']) {
     const a = before?.[group] ?? {}
     const b = after?.[group] ?? {}
@@ -142,10 +149,18 @@ export function diffSurface(before, after) {
       if (JSON.stringify(a[key]) === JSON.stringify(b[key])) continue
       if (a[key] === undefined) changes.push(`${group}.${key}: 新增 ${describe(after[key])}`)
       else if (b[key] === undefined) changes.push(`${group}.${key}: 移除（原为 ${describe(a[key])}）`)
-      else changes.push(`${group}.${key}: ${describe(a[key])} → ${describe(b[key])}`)
+      else if (group === 'packages' && samePackageShape(a[key], b[key])) {
+        versionOnly.push(`${group}.${key}: v${a[key].version} → v${b[key].version}`)
+      } else changes.push(`${group}.${key}: ${describe(a[key])} → ${describe(b[key])}`)
     }
   }
-  return changes
+  return { changes, versionOnly }
+}
+
+/** 两个包记录除了版本号以外是否一致。 */
+function samePackageShape(a, b) {
+  if (a === undefined || b === undefined) return false
+  return a.present === b.present && a.entry === b.entry
 }
 
 /** 一条观察记录的短文，用于输出与差异行。 */
