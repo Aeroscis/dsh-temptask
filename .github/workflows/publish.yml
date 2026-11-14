@@ -25,7 +25,23 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 24
-          registry-url: https://registry.npmjs.org
+          # 刻意不写 registry-url：它会让 setup-node 生成一份 .npmrc，
+          # 里面是 `_authToken=${NODE_AUTH_TOKEN}`。仓库没有这个 secret 时
+          # npm 拿着空 token 去认证，直接 E401，把 OIDC 受信任发布顶掉。
+          # 不写它，npm 走 Actions 的 OIDC 换临时 token。
+
+      - name: 确认 OIDC 可用，且没有被占位 token 顶掉
+        run: |
+          set -e
+          if [ -z "$ACTIONS_ID_TOKEN_REQUEST_URL" ]; then
+            echo "没有 OIDC 请求地址：job 的 permissions 里缺少 id-token: write" >&2
+            exit 1
+          fi
+          # 仓库里若残留带 _authToken 的 .npmrc，同样会让 npm 改用 token 认证。
+          if [ -f .npmrc ] && grep -q '_authToken' .npmrc; then
+            echo ".npmrc 里有 _authToken，删除后再发布（改用 OIDC）"
+            sed -i '/_authToken/d' .npmrc
+          fi
 
       # trusted publishing 要求 npm >= 11.5.1，`npm stage publish` 要求 >= 11.15。
       - name: 确保 npm 支持 staged publishing
