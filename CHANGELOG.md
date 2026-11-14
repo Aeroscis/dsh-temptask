@@ -4,6 +4,23 @@
 
 发布渠道：npm [`@aeroscis/dsh-temptask`](https://www.npmjs.com/package/@aeroscis/dsh-temptask) · 源码 <https://github.com/Aeroscis/dsh-temptask>
 
+## [0.6.1] — 2026-11-14
+
+### 兼容性：验证 DSH 0.2.2-rc.3，版本范围收窄到 0.2.x
+
+- **0.2.2-rc.3 实测兼容，代码一行未改**：宿主自己的 `evaluatePluginCompatibility` 对
+  `0.2.2-rc.3` 返回兼容；`check-registration`（4 项，用宿主真实 `SlotCore`）与
+  `check:seed-parity`（10 项，用宿主真实 `buildForkSeed`）在这版宿主上全过。
+  rc.3 把客户端产物压成单行、字符串字面量改用反引号，本插件不受影响。
+- **`engines.dsh` 与 `@deepseek-ai/dsh*` 的 peer 范围统一为 `^0.2.1-0 || ^0.2.2-0`**
+  （原为 `^0.1.5-rc.2 || ^0.2.0-rc.1`）。新范围覆盖整个 0.2.x，含 0.2.3 这类尚未发布的
+  次版本，0.3.0-rc.1 起被拒。
+- **去掉 0.1.x 那半段是有意的**：代码里的降级路径（`settingsScope.bind` 的 0.1.x 分支、
+  `ctx.get()` 探测式降级）**仍然保留**，但 0.1.x 宿主已不再实测，也不再对外承诺。
+  留着旧范围等于对外声明一条没人验过的支持线，反而会让「0.2.2-rc.1 漏掉」那类问题重演。
+  需要一个明确的下界：从 0.2.1 起，也就是本插件开始按 0.2 线验证的版本。
+- 版本范围不再写具体预发布号（`-rc.1`、`-rc.3`）：宿主判定时开着 `includePrerelease`，
+  `^0.2.1-0` 会覆盖同主次线上的所有预发布，写死具体 rc 号只会有漏网的下一个 rc。
 ## [0.6.0] — 2026-11-06
 
 ### 兼容性：适配 DSH 0.2.2-rc.1（桌面版 DSH NEXT 2.0.22-next 内置的运行时）
