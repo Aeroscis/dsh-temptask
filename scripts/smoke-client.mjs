@@ -521,6 +521,22 @@ check('构建产物里带着「只在本行隐藏官方 title」的样式（防�
     /__tt_rowWide\{[^}]*overflow:hidden/u.test(bundleSource),
     '宽栏那一行要 overflow:hidden：任何子项尺寸意外都不许把底色画出圆角边框',
   );
+  /*
+   * 悬停分区：行本身不整块变亮，主区（左）与小按钮（右）各自亮各自的。
+   * 左侧用 interactive-bg-hover 与右侧圆形悬停同一套语言（白光变亮），
+   * 而不是官方面板那种"整行变亮"，否则分隔线两侧会糊成一块。
+   */
+  assert.equal(
+    bundleSource.includes('__tt_rowWide:hover'),
+    false,
+    '行本身不应有 :hover 底色：整行变亮会把分隔线两侧混成一块',
+  );
+  assert.ok(
+    bundleSource.includes(
+      '__tt_primary:hover:not(.__tt_primaryBusy){background:var(--dsw-alias-interactive-bg-hover)}',
+    ),
+    '主区悬停要用与右侧小按钮相同的 interactive-bg-hover',
+  );
   assert.ok(
     fallbackRow().options.label().length > 0,
     'label 必须非空：官方用它做 tooltip 与无障碍名（可见文字由本行自己渲染）',

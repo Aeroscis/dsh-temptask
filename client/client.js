@@ -317,7 +317,15 @@ window.__ModuleLoader__.load({
         // margin 归外壳管（两种挂法各有一套，见下面两段），这里只管按钮自己的盒子。
         // overflow:hidden 是第二道保险：无论因子项尺寸出什么意外，底色都不许画出圆角边框之外。
         '.__tt_rowWide{box-sizing:border-box;min-height:38px;padding:0;gap:0;margin:0;border:.5px solid var(--dsw-alias-border-l3);border-radius:12px;background:var(--dsw-alias-button-elevated-fill);overflow:hidden}',
-        '.__tt_rowWide:hover{background:var(--dsw-alias-button-floating-hover)}',
+        /*
+         * 悬停**分两个区**，行本身不整块变亮。
+         *
+         * 这一行左边是「新建临时任务」一个动作，右边是五个互不相干的按钮：整行一起变亮会把
+         * 分隔线两侧混成一块，看起来像"整块按钮被放大"（用户指出）。所以：
+         *   - 行的底色始终是 elevated 填充，**没有**行级 :hover 规则；
+         *   - 主区单独悬停时，只有分隔线左边那一块（左圆角、右直角）亮起；
+         *   - 右侧五个小按钮各自是圆形悬停（见 .__tt_tiny:hover），彼此也不连成一片。
+         */
         /*
          * 挂法一（宿主没有 `sidebar.session.action` 槽位时）：
          * 本行注册在 `sidebar.panellist` 里，宽栏换掉官方面板行的按钮盒子，外层留出与「新建会话」
@@ -369,7 +377,7 @@ window.__ModuleLoader__.load({
         '[class*="panelRow"]:has(.__tt_row):hover{background:transparent}',
         // 主区（整块可点 = 新建）+ 右侧次要动作区（竖线分隔）
         '.__tt_primary{display:flex;align-items:center;gap:8px;flex:1;min-width:0;height:100%;padding:8px 12px;border-radius:11px 0 0 11px;color:var(--dsw-alias-label-primary);font-size:14px;line-height:22px;font-weight:500;cursor:pointer}',
-        '.__tt_primary:hover:not(.__tt_primaryBusy){background:var(--dsw-alias-button-floating-hover)}',
+        '.__tt_primary:hover:not(.__tt_primaryBusy){background:var(--dsw-alias-interactive-bg-hover)}',
         '.__tt_primary:focus-visible{outline:2px solid var(--dsw-alias-label-primary);outline-offset:-2px}',
         '.__tt_primaryBusy{cursor:default;color:var(--dsw-alias-label-tertiary)}',
         '.__tt_primaryRail{justify-content:center;padding:0}',
