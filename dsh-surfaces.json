@@ -82,6 +82,23 @@
           "edit"
         ],
         "why": "设置项写入"
+      },
+      {
+        "name": "systemPrompt",
+        "members": [
+          "section",
+          "variable",
+          "suppressRuntimeContext"
+        ],
+        "why": "src/chat-preset.ts 注册「聊天」模式的 persona、当天日期变量，并抑制可选运行时上下文"
+      },
+      {
+        "name": "tools",
+        "members": [
+          "schemas",
+          "restrict"
+        ],
+        "why": "src/chat-preset.ts 读出宿主全局工具名，并把它们从「聊天」preset 的 agent 视图里摘掉"
       }
     ],
     "packages": [
@@ -99,7 +116,9 @@
       "dsh-session-query",
       "dsh-agent-preset-registry",
       "dsh-agent-default-model",
-      "dsh-config-editor"
+      "dsh-config-editor",
+      "dsh-system-prompt",
+      "dsh-tools"
     ]
   },
   "client": {

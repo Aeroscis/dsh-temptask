@@ -18,6 +18,7 @@ import { tmpdir } from 'node:os';
 import { basename, join } from 'node:path';
 
 import plugin, * as entry from '../lib/index.js';
+import * as chatPreset from '../lib/chat-preset.js';
 import * as configModule from '../lib/config.js';
 import * as describeModule from '../lib/describe.js';
 import * as seedModule from '../lib/seed.js';
@@ -1681,6 +1682,101 @@ try {
       assert.equal(promoted.ok, true, JSON.stringify(promoted));
       assert.ok(leaseState.observedLeases.length >= 1, '至少要读过一条来源会话');
       assert.deepEqual(leaseState.disposedLeases, leaseState.observedLeases, '读一条就该还一条');
+    });
+  }
+
+  /* ─── 「聊天」preset 的子插件：persona 与日期 ─── */
+  {
+    const date = chatPreset.formatDeepSeekWebDate(
+      new Date('2026-11-17T00:00:00+08:00'),
+      'Asia/Shanghai',
+    );
+    check('聊天 persona：日期按网页端中文格式渲染（带逗号和星期）', () => {
+      assert.equal(date, '2026年11月17日，星期二');
+    });
+
+    const registered = { sections: [], variables: [], suppressed: 0 };
+    const prompt = {
+      section(section) {
+        registered.sections.push(section);
+        return () => {};
+      },
+      variable(name, provider) {
+        registered.variables.push({ name, provider });
+        return () => {};
+      },
+      suppressRuntimeContext() {
+        registered.suppressed += 1;
+        return () => {};
+      },
+    };
+    const stub = {
+      get: (name) => (name === 'systemPrompt' ? prompt : undefined),
+      effect: (callback) => {
+        const disposer = callback();
+        return typeof disposer === 'function' ? disposer : () => {};
+      },
+    };
+    chatPreset.apply(stub);
+
+    check('聊天 persona：只有一个 complete 段落，就是网页端那句身份 + 日期', () => {
+      assert.equal(registered.sections.length, 1);
+      const [persona] = registered.sections;
+      assert.equal(persona.complete, true);
+      assert.equal(persona.order, 0);
+      assert.match(persona.text, /^该助手为DeepSeek Chat，由深度求索公司创造。今天是\{\{temptask_chat_date\}\}。$/);
+    });
+    check('聊天 persona：注册了日期变量，provider 每次组装都能给出当天日期', () => {
+      assert.equal(registered.variables.length, 1);
+      const [variable] = registered.variables;
+      assert.equal(variable.name, 'temptask_chat_date');
+      assert.match(variable.provider(), /^\d{4}年\d{1,2}月\d{1,2}日，星期[一二三四五六日]$/);
+    });
+    check('聊天 persona：抑制可选运行时上下文，且子插件声明依赖 systemPrompt', () => {
+      assert.equal(registered.suppressed, 1);
+      assert.deepEqual(chatPreset.inject, ['systemPrompt']);
+    });
+
+    /*
+     * 宿主侧收尾：preset 挂载时宿主工具可能还没注册完，所以工具限制必须
+     * 等到 `agent/created` 才做。这里用假 ctx 验证监听器只对 chat agent
+     * 动手，并且 deny 列表来自当时的全局工具目录。
+     */
+    const listeners = new Map();
+    const hostStub = {
+      inject(names, callback) {
+        const services = {
+          agentPresets: { composedPreset: (ctx) => ctx.preset },
+          tools: { schemas: () => [{ name: 'working_directory' }] },
+        };
+        const child = {
+          get: (name) => services[name],
+          on: (event, listener) => {
+            listeners.set(event, listener);
+            return () => {};
+          },
+        };
+        callback(child);
+      },
+    };
+    chatPreset.installChatToolRestriction(hostStub, () => {});
+    const restrictCalls = [];
+    const makeAgent = (preset) => ({
+      id: `agent-${preset}`,
+      ctx: {
+        preset,
+        tools: {
+          restrict(filter) {
+            restrictCalls.push(filter);
+            return () => {};
+          },
+        },
+      },
+    });
+    listeners.get('agent/created')({ agent: makeAgent('standard') });
+    listeners.get('agent/created')({ agent: makeAgent('chat') });
+    check('聊天模式在 agent 创建后隐藏宿主全局工具（standard 会话不动）', () => {
+      assert.deepEqual(restrictCalls, [{ deny: ['working_directory'] }]);
     });
   }
 

@@ -17,6 +17,7 @@ import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
+import { installChatToolRestriction } from './chat-preset.js';
 import { createTaskCommand } from './commands.js';
 import {
   SETTINGS_NAMESPACE,
@@ -200,6 +201,13 @@ export function apply(ctx: DshContext, config?: unknown): void {
     home: homedir,
   });
   storeWarningSink = (message) => manager.recordWarning(message);
+
+  /*
+   * 「聊天」preset 的宿主侧收尾：agent 创建后把宿主层的全局工具摘掉。
+   * 必须放在 host 作用域监听 `agent/created`——preset 声明是提前挂载的，
+   * 那时 `tool-working-directory` 这些宿主工具行还不一定注册完。
+   */
+  installChatToolRestriction(ctx, log);
 
   /** 启动流程：先解析配置（宿主配置层 → 行配置），再载入清单。 */
   const ready = (async (): Promise<void> => {

@@ -4,6 +4,35 @@
 
 发布渠道：npm [`@aeroscis/dsh-temptask`](https://www.npmjs.com/package/@aeroscis/dsh-temptask) · 源码 <https://github.com/Aeroscis/dsh-temptask>
 
+## [0.7.0] — 2026-11-17
+
+### 新增：「聊天」模式——DeepSeek 网页端式的纯聊天，走 API，不加载任何工具
+
+- **为什么**：网页端的额度不够用时，可以在同一个 DSH 里切到 API 模型聊天，而不必另开网页。
+- **怎么进入**：插件 bundle patch 新增一条 `@deepseek-ai/dsh-agent-preset` 声明（`id: chat`，
+  显示名「聊天」，`order: 5`）。它是 profile 级预设，所以整个软件的新会话都能在模式选择器里
+  看到；也可以在「设置 → 通用设置 → Agent 预设」设为默认。会话开始第一轮后不能换预设，
+  这是 DSH 的规则，文档里写清楚了。
+- **注入什么**：新增 `src/chat-preset.ts`，在 preset 作用域里注册
+  `该助手为DeepSeek Chat，由深度求索公司创造。今天是{{temptask_chat_date}}。`
+  （DeepSeek 官方模型卡给出的网页端系统提示词），并把日期变量按本机时区渲染成
+  `2026年11月17日，星期二` 这种格式。persona 用 `complete: true` 成为唯一系统提示词，
+  同时 `suppressRuntimeContext()` 去掉可选运行时上下文。
+- **不加载任何工具**：组成只有 persona 子插件 + 自动压缩（`compaction-basic`）。
+  没有 shell、文件、搜索、待办、子 agent、技能，也没有 `/compact` 命令。联网搜索没有挂，
+  因为它本身是工具调用——按「不要任何额外工具调用」的要求排除。宿主层自带的全局工具
+  （如 `working_directory`）不归 preset 管，所以主 host 插件在 `agent/created` 时调用
+  `agent.ctx.tools.restrict({ deny })`，把它们从聊天会话的视图里摘掉。放在 `agent/created`
+  而不是 preset 挂载时，是因为 preset 声明是提前加载的，那时宿主工具行往往还没注册完。
+- **宿主接口**：新增对 `ctx.systemPrompt` 的 `section` / `variable` / `suppressRuntimeContext`
+  依赖，已写进 `dsh-surfaces.json` 并更新 `dsh-baseline.json`。
+- **验证**：host smoke 78 项、client smoke 63 项、发布形态自检 7 项、compat 规则 26 项均通过；
+  另外在隔离的 Web profile 里 `--dump-config` 确认补丁行插入，启动后没有
+  `did not activate` / `agent preset chat` 告警。日期格式、complete 段落、变量 provider、
+  运行时上下文抑制都有冒烟用例钉住。
+- **已知限制**：DSH 会把当前工作目录作为必需运行时上下文发给模型，这个去不掉；聊天模式
+  仍知道自己在哪个目录，但没有工具去读它。日期用进程时区（prompt 变量拿不到浏览器时区）。
+
 ## [0.6.3] — 2026-11-15
 
 ### 修复：鼠标悬停时「临时任务」左侧的底色比整行更高、从边框里漫出去

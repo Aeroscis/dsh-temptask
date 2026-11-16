@@ -283,6 +283,56 @@ border-box，主区因此正好 36，填满行的内容盒），以及宽栏那�
 **降级通道**：宿主既没有 `configEditor`、也没有 settings 服务、或取不到 schemastery 时，
 插件不会加载失败，而是改用 `<dataDir>/config.json`（设置卡片会显示「配置来源」）。
 
+### 「聊天」模式为什么做成 preset，而不是新页面或新工具
+
+**为什么是 preset**：DSH 的「模式」就是 agent preset，声明必须由某个 bundle patch 插入。
+做成 preset 是唯一能同时满足这几件事的做法：出现在新建会话/空白会话的模式选择器里、
+可设为默认、只影响自己的会话、不用改宿主 Web UI。另开一个侧边栏入口也能开聊天会话，
+但那只是「快捷方式」，而且会把功能绑死在本插件自己的入口上；preset 是 profile 级的，
+所有会话入口都认它。被否掉的方案还有「给标准模式加一个隐藏工具/开关」——那会改变标准
+模式的提示词与工具目录，不是用户要的「另一个模式」。
+
+**为什么自己注册 persona，而不是直接用 `@deepseek-ai/dsh-persona`**：`dsh-persona` 的
+`prefix` 是静态字符串，不能每天变。聊天模式要注入网页端那句「今天是…」，日期必须每次
+组装时现算。一个 preset 子插件同时注册 `variable()`、`section({ complete: true })` 和
+`suppressRuntimeContext()`，三件事在同一个作用域、同一个生命周期里，不会出现「persona 是
+一个包、日期是另一个包、其中一个没挂上」的半成品。它还顺带避免了第三方 preset 对
+`@deepseek-ai/dsh-persona` 的额外依赖。
+
+**为什么 `complete: true`**：DeepSeek 网页端的系统提示词只有身份和日期；如果不用 complete，
+DSH 还会拼上 harness 身份、部署 persona、工具指引等段落，模型看到的就不再是网页端那一句。
+`complete` 让渲染出的 persona 成为该 agent 的唯一 prompt 段落。注意它只压掉 prompt 文本，
+不压工具——工具是 wire 层的 schema，所以「没有工具」必须由 preset 不挂 `tool-*` 行来保证。
+
+**为什么没有工具**：用户的要求是「不要给任何额外的工具调用」。DSH 的联网搜索本身也是
+工具调用（`web_search`），因此也没有挂；preset 里只留 persona 和自动压缩。压缩不是工具，
+它只负责长对话的上下文管理，对应网页端自动处理上下文的行为。`/compact` 命令也没有挂——
+网页端没有这个命令。
+
+**宿主层工具怎么处理**：preset 里没有 `tool-*` 行，不代表 agent 的工具目录是空的。
+`tool-working-directory` 挂在 host 平面（Web 补丁没有禁用它），它的 `working_directory`
+会出现在每个 agent 的目录里。这个工具不归 preset 管，只能从 agent 自己的 ctx 限制：
+主 host 插件监听 `agent/created`，用 `agentPresets.composedPreset(agent.ctx)` 认出聊天会话，
+再调用 `agent.ctx.tools.restrict({ deny: 当前全局工具名 })`。放在 `agent/created` 而不是
+preset 挂载时，是因为 preset 声明是提前加载的：挂载那一刻 `tools.schemas()` 可能还是空数组，
+按当时的名字限制等于没限制；`agent/created` 在宿主工具都注册完之后、agent 被驱动之前，
+既拿得到完整目录，又还来得及影响第一条模型请求。
+
+**日期怎么算**：`formatDeepSeekWebDate()` 用 `Intl.DateTimeFormat('zh-CN')` 的
+`formatToParts()` 自己拼 `年月日，星期`。中文 locale 的 `format()` 在日期与星期之间没有
+逗号，而官方那句提示词有；`formatToParts()` 还能在时区非法时退回本地日期。时区用进程
+时区：`systemPrompt.variable()` 的 provider 只拿得到组装上下文，拿不到请求的浏览器时区。
+这是已知限制，写进 README 了。
+
+**为什么必需的工作目录上下文去不掉**：`dsh-working-directory` 把它注册成 `required` 的
+运行时上下文，`suppressRuntimeContext()` 只抑制可选贡献，`required` 的仍然保留。这是宿主
+的安全/定位下限，不是本插件能改的；README 明确告诉用户聊天模式仍知道工作目录。
+
+**怎么验的**：除了 host/client 冒烟测试，还用一个隔离的 `DSH_HOME` 建了 `web` profile，
+把本插件装进去后 `--dump-config` 确认 `preset-chat` 行存在，再真实启动 Web 组合，
+确认没有 `entry did not activate` 和 `agent preset chat` 告警。preset 子插件的
+`@aeroscis/dsh-temptask/chat-preset` 自引用在 profile 的 node_modules 下能解析。
+
 ## 5. 官方语义核对与证据
 
 ### 5.1 支持的 DSH 版本与核对结论

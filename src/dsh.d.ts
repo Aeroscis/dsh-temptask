@@ -33,6 +33,12 @@ interface DshContext {
   get<T = unknown>(name: string): T | undefined;
   /** 硬依赖注入：依赖出现后才执行回调，随该 fiber 卸载自动回收。 */
   inject(names: string[], callback: (ctx: DshContext) => void | (() => void)): () => void;
+  /** `agent/created` 的载荷带 live agent，用于在首个模型请求前改它的作用域。 */
+  on(
+    event: 'agent/created',
+    listener: (payload: DshAgentCreatedPayload) => void,
+    options?: { prepend?: boolean; global?: boolean },
+  ): () => void;
   on(
     event: string,
     listener: (...args: never[]) => void,
@@ -61,6 +67,61 @@ interface DshCommandDefinition {
 }
 interface DshCommandsService {
   register(definition: DshCommandDefinition): () => void;
+}
+
+/**
+ * `ctx.systemPrompt` — agent 的系统提示词注册表。
+ *
+ * 「聊天」preset 的子插件用它在 preset 作用域里注册：
+ *   - 日期变量（persona 文本通过 `{{temptask_chat_date}}` 引用）；
+ *   - 一个 `complete` 段落，让这句 persona 成为整段系统提示词；
+ *   - 运行时上下文抑制，去掉可选上下文。
+ */
+interface DshSystemPromptSection {
+  name: string;
+  order: number;
+  text: string | ((context: unknown) => string);
+  /** 默认 true；false 时原样保留文本，不插值 `{{…}}`。 */
+  interpolate?: boolean;
+  /** 只有一个生效的 complete 段落；它会成为该 agent 的完整系统提示词。 */
+  complete?: boolean;
+}
+interface DshSystemPromptService {
+  section(section: DshSystemPromptSection): () => void;
+  variable(name: string, provider: (context: unknown) => string | undefined): () => void;
+  suppressRuntimeContext(): () => void;
+}
+
+/**
+ * `ctx.tools` — 工具注册表（这里只用到「读全局工具名」与「按 agent 作用域限制」）。
+ *
+ * 聊天模式没有任何自己的工具，但宿主层还有 `working_directory` 这种不随 preset
+ * 走的全局工具。`restrict({ deny })` 把这些全局工具从聊天 agent 的视图里摘掉；
+ * 只限制继承的全局工具，不碰本作用域自己注册的工具。
+ */
+interface DshToolSchemaLike {
+  readonly name: string;
+}
+interface DshToolsService {
+  /** 省略 scope = 全局视图；只用于读出要 deny 的名字。 */
+  schemas(scope?: unknown, toolSet?: unknown): DshToolSchemaLike[];
+  restrict(filter: { allow?: string[]; deny?: string[] }): () => void;
+}
+
+/** live agent 的 ctx：`agent/created` 监听器拿它做 per-agent 限制。 */
+interface DshAgentContextLike extends DshContext {
+  /** Cordis 服务属性；限制必须从 agent 自己的 ctx 发起。 */
+  readonly tools?: DshToolsService;
+}
+interface DshAgentLike {
+  readonly id: string;
+  readonly ctx: DshAgentContextLike;
+  readonly session?: { readonly id?: string };
+}
+interface DshAgentCreatedPayload {
+  readonly agent: DshAgentLike;
+  readonly source?: unknown;
+  readonly signal?: AbortSignal;
 }
 
 /** `ctx.webServer` — 浏览器 HTTP 载体。 */
@@ -220,6 +281,10 @@ interface DshSessionQueryService {
 interface DshAgentPresetsService {
   resolve(presetId?: string): Promise<{ id: string }>;
   mount(agentCtx: unknown, presetId: string): Promise<void> | void;
+  /** live agent 绑定的 preset id；没有绑定时为 undefined。 */
+  composedPreset?(agentCtx: unknown): string | undefined;
+  /** 会话记录的 preset id；没有记录时为 null。 */
+  presetForSession?(session: unknown): string | null;
 }
 
 /** `ctx.agentDefaultModel` — 官方建会话时给的 `agentOptions` 就来自这里。 */

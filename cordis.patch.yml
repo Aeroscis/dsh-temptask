@@ -19,3 +19,35 @@
 - insert:
     - id: dsh-temptask
       name: '@aeroscis/dsh-temptask'
+
+    # 「聊天」preset：给整个 profile 加一个不加载任何工具的纯聊天模式。
+    #
+    # 为什么放在本插件的补丁里：DSH 的「模式」就是 agent preset，声明必须由
+    # 某个 bundle patch 插入；本插件已经是一个被 profile 加载的 bundle，
+    # 顺手插入这一行，用户装完插件就能在新会话/空白会话的模式选择器里看到它。
+    #
+    # 组成只有两行：
+    #   - chat-persona：本包自己的子插件，注册 DeepSeek 网页端那句 persona、
+    #     当天日期变量，并抑制可选运行时上下文；
+    #   - compaction：长对话自动压缩（网页端也会自动处理上下文），
+    #     不挂 /compact 命令，也不挂任何工具。
+    #
+    # 不要在这里加 tool-* 行：这个模式的产品定义就是「网页端能用的纯聊天」。
+    - id: preset-chat
+      name: '@deepseek-ai/dsh-agent-preset'
+      config:
+        id: chat
+        name: '聊天'
+        description: '像 DeepSeek 网页版一样纯聊天：不加载任何工具，系统提示词只有身份和当前日期，用 API 模型对话。'
+        order: 5
+        plugins:
+          - id: chat-persona
+            name: '@aeroscis/dsh-temptask/chat-preset'
+          - id: compaction
+            name: cordis:group
+            group: true
+            isolate:
+              compaction: true
+            config:
+              - id: compaction-basic
+                name: '@deepseek-ai/dsh-compaction-basic'

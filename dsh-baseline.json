@@ -1,7 +1,7 @@
 {
   "$comment": "本文件由 node scripts/compat-probe.mjs --write-baseline 生成，记录确认可用的宿主版本与接口表面，供后续升级比对。",
   "runtime": "0.2.2-rc.3",
-  "recordedAt": "2026-11-14T15:13:06.936Z",
+  "recordedAt": "2026-11-16T17:40:36.305Z",
   "surface": {
     "hostServices": {
       "webServer": {
@@ -52,6 +52,16 @@
       "configEditor": {
         "provided": true,
         "provider": "dsh-config-editor",
+        "missingMembers": []
+      },
+      "systemPrompt": {
+        "provided": true,
+        "provider": "dsh-system-prompt",
+        "missingMembers": []
+      },
+      "tools": {
+        "provided": true,
+        "provider": "dsh-tools",
         "missingMembers": []
       }
     },
