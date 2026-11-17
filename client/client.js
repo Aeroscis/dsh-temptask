@@ -63,7 +63,7 @@ window.__ModuleLoader__.load({
     /**
      * 客户端半边的版本 —— **构建期注入，不要手写**。
      *
-     * `0.7.1` 是 `scripts/build-client.mjs` 的替换点：包装 ModuleLoader
+     * `0.7.2` 是 `scripts/build-client.mjs` 的替换点：包装 ModuleLoader
      * 包时换成当时的 `package.json` 的 `version`，找不到占位符就直接构建失败。浏览器里
      * 读不到 `package.json`，所以这一半只能在构建期定版。
      *
@@ -74,7 +74,7 @@ window.__ModuleLoader__.load({
      * 历史：0.4.0 忘了改这里的字面量，发布出去的包里 host 报 `0.4.0`、界面报 `0.3.3`，
      * 设置卡片与 `?` 气泡一直挂着"两半版本不一致"的告警。改成注入后不可能再漂移。
      */
-    const CLIENT_VERSION = '0.7.1';
+    const CLIENT_VERSION = '0.7.2';
     /**
      * `?` 气泡的"鼠标离开后自动收起"延迟（毫秒）。
      * 取值依据：450ms 是「不误收」与「不显得拖沓」之间的取值（600ms 偏慢）。

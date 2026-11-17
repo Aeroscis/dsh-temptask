@@ -31,14 +31,10 @@ interface DshContext {
   readonly fiber?: DshFiberLike;
   /** 可选服务读取：拿到 undefined 时必须自行降级。 */
   get<T = unknown>(name: string): T | undefined;
+  /** Cordis 服务属性；这里只用到 tools（preset 作用域的工具限制）。 */
+  readonly tools?: DshToolsService;
   /** 硬依赖注入：依赖出现后才执行回调，随该 fiber 卸载自动回收。 */
   inject(names: string[], callback: (ctx: DshContext) => void | (() => void)): () => void;
-  /** `agent/created` 的载荷带 live agent，用于在首个模型请求前改它的作用域。 */
-  on(
-    event: 'agent/created',
-    listener: (payload: DshAgentCreatedPayload) => void,
-    options?: { prepend?: boolean; global?: boolean },
-  ): () => void;
   on(
     event: string,
     listener: (...args: never[]) => void,
@@ -108,20 +104,9 @@ interface DshToolsService {
   restrict(filter: { allow?: string[]; deny?: string[] }): () => void;
 }
 
-/** live agent 的 ctx：`agent/created` 监听器拿它做 per-agent 限制。 */
-interface DshAgentContextLike extends DshContext {
-  /** Cordis 服务属性；限制必须从 agent 自己的 ctx 发起。 */
-  readonly tools?: DshToolsService;
-}
-interface DshAgentLike {
-  readonly id: string;
-  readonly ctx: DshAgentContextLike;
-  readonly session?: { readonly id?: string };
-}
-interface DshAgentCreatedPayload {
-  readonly agent: DshAgentLike;
-  readonly source?: unknown;
-  readonly signal?: AbortSignal;
+/** `ctx.loader` — 宿主 Loader；`await()` 等整棵宿主树结算完。 */
+interface DshLoaderService {
+  await(): Promise<void>;
 }
 
 /** `ctx.webServer` — 浏览器 HTTP 载体。 */
@@ -281,10 +266,6 @@ interface DshSessionQueryService {
 interface DshAgentPresetsService {
   resolve(presetId?: string): Promise<{ id: string }>;
   mount(agentCtx: unknown, presetId: string): Promise<void> | void;
-  /** live agent 绑定的 preset id；没有绑定时为 undefined。 */
-  composedPreset?(agentCtx: unknown): string | undefined;
-  /** 会话记录的 preset id；没有记录时为 null。 */
-  presetForSession?(session: unknown): string | null;
 }
 
 /** `ctx.agentDefaultModel` — 官方建会话时给的 `agentOptions` 就来自这里。 */

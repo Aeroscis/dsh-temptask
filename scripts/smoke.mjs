@@ -1695,7 +1695,7 @@ try {
       assert.equal(date, '2026年11月17日，星期二');
     });
 
-    const registered = { sections: [], variables: [], suppressed: 0 };
+    const registered = { sections: [], variables: [], suppressed: 0, restrictions: [], disposed: 0 };
     const prompt = {
       section(section) {
         registered.sections.push(section);
@@ -1710,14 +1710,32 @@ try {
         return () => {};
       },
     };
+    const tools = {
+      schemas() {
+        return [{ name: 'create_skill' }, { name: 'working_directory' }];
+      },
+      restrict(filter) {
+        registered.restrictions.push(filter);
+        return () => {
+          registered.disposed += 1;
+        };
+      },
+    };
+    const loader = { await: () => Promise.resolve() };
     const stub = {
-      get: (name) => (name === 'systemPrompt' ? prompt : undefined),
+      tools,
+      get: (name) => {
+        if (name === 'systemPrompt') return prompt;
+        if (name === 'loader') return loader;
+        return undefined;
+      },
       effect: (callback) => {
         const disposer = callback();
         return typeof disposer === 'function' ? disposer : () => {};
       },
     };
     chatPreset.apply(stub);
+    await new Promise((resolve) => setTimeout(resolve, 0));
 
     check('聊天 persona：只有一个 complete 段落，只注入当天日期、不写助手身份', () => {
       assert.equal(registered.sections.length, 1);
@@ -1733,51 +1751,12 @@ try {
       assert.equal(variable.name, 'temptask_chat_date');
       assert.match(variable.provider(), /^\d{4}年\d{1,2}月\d{1,2}日，星期[一二三四五六日]$/);
     });
-    check('聊天 persona：抑制可选运行时上下文，且子插件声明依赖 systemPrompt', () => {
+    check('聊天 persona：抑制可选运行时上下文，且子插件声明依赖 prompt/tools/loader', () => {
       assert.equal(registered.suppressed, 1);
-      assert.deepEqual(chatPreset.inject, ['systemPrompt']);
+      assert.deepEqual(chatPreset.inject, ['systemPrompt', 'tools', 'loader']);
     });
-
-    /*
-     * 宿主侧收尾：preset 挂载时宿主工具可能还没注册完，所以工具限制必须
-     * 等到 `agent/created` 才做。这里用假 ctx 验证监听器只对 chat agent
-     * 动手，并且 deny 列表来自当时的全局工具目录。
-     */
-    const listeners = new Map();
-    const hostStub = {
-      inject(names, callback) {
-        const services = {
-          agentPresets: { composedPreset: (ctx) => ctx.preset },
-          tools: { schemas: () => [{ name: 'working_directory' }] },
-        };
-        const child = {
-          get: (name) => services[name],
-          on: (event, listener) => {
-            listeners.set(event, listener);
-            return () => {};
-          },
-        };
-        callback(child);
-      },
-    };
-    chatPreset.installChatToolRestriction(hostStub, () => {});
-    const restrictCalls = [];
-    const makeAgent = (preset) => ({
-      id: `agent-${preset}`,
-      ctx: {
-        preset,
-        tools: {
-          restrict(filter) {
-            restrictCalls.push(filter);
-            return () => {};
-          },
-        },
-      },
-    });
-    listeners.get('agent/created')({ agent: makeAgent('standard') });
-    listeners.get('agent/created')({ agent: makeAgent('chat') });
-    check('聊天模式在 agent 创建后隐藏宿主全局工具（standard 会话不动）', () => {
-      assert.deepEqual(restrictCalls, [{ deny: ['working_directory'] }]);
+    check('聊天模式：宿主 Loader 结算后，把全局工具从 preset 作用域一次摘掉', () => {
+      assert.deepEqual(registered.restrictions, [{ deny: ['create_skill', 'working_directory'] }]);
     });
   }
 

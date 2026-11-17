@@ -4,6 +4,21 @@
 
 发布渠道：npm [`@aeroscis/dsh-temptask`](https://www.npmjs.com/package/@aeroscis/dsh-temptask) · 源码 <https://github.com/Aeroscis/dsh-temptask>
 
+## [0.7.2] — 2026-11-17
+
+### 修复：聊天模式仍然能看到 `working_directory` 和第三方工具
+
+- **现象**：0.7.1 下新建聊天会话，请求头里仍有 `working_directory`、
+  `load_workspace_dependencies`、`create_skill`、`run-deck`、`zcode_start_plan_status` 等工具。
+- **原因**：0.7.1 把工具限制挂在主 host 插件的 `agent/created` 监听上；实测这个监听
+  没有可靠地覆盖到该会话，preset id 过滤/时序没有按预期生效。
+- **修法**：把限制挪回 `src/chat-preset.ts`（preset 子插件）：`inject(['tools','loader'])`，
+  等 `loader.await()` 宿主树结算后，在 **preset 作用域** 调 `tools.restrict({ deny: 全部全局
+  工具名 })`。preset 作用域的限制会被绑定该 preset 的所有 agent 继承；等 Loader 结算再算
+  deny 列表，才不会在宿主工具行还没注册完时拿到空数组。
+- **验证**：隔离 Web profile 启动日志确认 `deny` 列表非空（至少含 `working_directory` 和
+  `team_task_*`）且 `restrict` 成功注册；0.7.1 的身份句移除保留。
+
 ## [0.7.1] — 2026-11-17
 
 ### 修复：聊天模式不再写死助手身份，只注入当天日期
@@ -32,9 +47,8 @@
 - **不加载任何工具**：组成只有 persona 子插件 + 自动压缩（`compaction-basic`）。
   没有 shell、文件、搜索、待办、子 agent、技能，也没有 `/compact` 命令。联网搜索没有挂，
   因为它本身是工具调用——按「不要任何额外工具调用」的要求排除。宿主层自带的全局工具
-  （如 `working_directory`）不归 preset 管，所以主 host 插件在 `agent/created` 时调用
-  `agent.ctx.tools.restrict({ deny })`，把它们从聊天会话的视图里摘掉。放在 `agent/created`
-  而不是 preset 挂载时，是因为 preset 声明是提前加载的，那时宿主工具行往往还没注册完。
+  （如 `working_directory`）不归 preset 管；0.7.0/0.7.1 先用 `agent/created` 监听做限制，
+  0.7.2 改成 preset 子插件在宿主 Loader 结算后用 `tools.restrict` 在 preset 作用域摘掉。
 - **宿主接口**：新增对 `ctx.systemPrompt` 的 `section` / `variable` / `suppressRuntimeContext`
   依赖，已写进 `dsh-surfaces.json` 并更新 `dsh-baseline.json`。
 - **验证**：host smoke 78 项、client smoke 63 项、发布形态自检 7 项、compat 规则 26 项均通过；

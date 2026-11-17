@@ -314,15 +314,18 @@ border-box，主区因此正好 36，填满行的内容盒），以及宽栏那�
 网页端没有这个命令。
 
 **宿主层工具怎么处理**：preset 里没有 `tool-*` 行，不代表 agent 的工具目录是空的。
-`tool-working-directory` 挂在 host 平面（Web 补丁没有禁用它），它的 `working_directory`
-会出现在每个 agent 的目录里。这个工具不归 preset 管，只能从 agent 自己的 ctx 限制：
-主 host 插件监听 `agent/created`，用 `agentPresets.composedPreset(agent.ctx)` 认出聊天会话，
-再调用 `agent.ctx.tools.restrict({ deny: 当前全局工具名 })`。放在 `agent/created` 而不是
-preset 挂载时，是因为 preset 声明是提前加载的：挂载那一刻 `tools.schemas()` 可能还是空数组，
-按当时的名字限制等于没限制；`agent/created` 在宿主工具都注册完之后、agent 被驱动之前，
-既拿得到完整目录，又还来得及影响第一条模型请求。
+`tool-working-directory` 挂在 host 平面（Web 补丁没有禁用它），第三方 profile 插件还会
+注册 `create_skill`、`run-deck` 这类全局工具，它们都会出现在每个 agent 的目录里。这些
+工具不归 preset 管，只能从 preset 作用域限制。
 
-**日期怎么算**：`formatDeepSeekWebDate()` 用 `Intl.DateTimeFormat('zh-CN')` 的
+时机不能用「preset 挂载那一刻」：preset 声明是提前加载的，挂载时 `tools.schemas()` 可能
+还是空数组，按当时的名字限制等于没限制。0.7.1 试过在主 host 插件监听 `agent/created`，
+实测没有可靠覆盖到会话；0.7.2 改成 preset 子插件 `inject(['tools','loader'])`，等
+`loader.await()` 把宿主树结算完、全局工具都到齐后，在 **preset 作用域** 调
+`tools.restrict({ deny: 全部全局工具名 })`。preset 作用域的限制会被绑定该 preset 的
+所有 agent 继承；`restrict` 只摘继承的全局工具，不碰 preset 自己注册的工具（目前没有）。
+
+**日期怎么算**：`formatChatDate()` 用 `Intl.DateTimeFormat('zh-CN')` 的
 `formatToParts()` 自己拼 `年月日，星期`。中文 locale 的 `format()` 在日期与星期之间没有
 逗号，而官方那句提示词有；`formatToParts()` 还能在时区非法时退回本地日期。时区用进程
 时区：`systemPrompt.variable()` 的 provider 只拿得到组装上下文，拿不到请求的浏览器时区。
