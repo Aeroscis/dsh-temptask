@@ -1687,7 +1687,7 @@ try {
 
   /* ─── 「聊天」preset 的子插件：persona 与日期 ─── */
   {
-    const date = chatPreset.formatDeepSeekWebDate(
+    const date = chatPreset.formatChatDate(
       new Date('2026-11-17T00:00:00+08:00'),
       'Asia/Shanghai',
     );
@@ -1719,12 +1719,13 @@ try {
     };
     chatPreset.apply(stub);
 
-    check('聊天 persona：只有一个 complete 段落，就是网页端那句身份 + 日期', () => {
+    check('聊天 persona：只有一个 complete 段落，只注入当天日期、不写助手身份', () => {
       assert.equal(registered.sections.length, 1);
       const [persona] = registered.sections;
       assert.equal(persona.complete, true);
       assert.equal(persona.order, 0);
-      assert.match(persona.text, /^该助手为DeepSeek Chat，由深度求索公司创造。今天是\{\{temptask_chat_date\}\}。$/);
+      assert.match(persona.text, /^今天是\{\{temptask_chat_date\}\}。$/);
+      assert.ok(!persona.text.includes('DeepSeek'), '不能写死助手身份：聊天可能跑在别的 API 路由上');
     });
     check('聊天 persona：注册了日期变量，provider 每次组装都能给出当天日期', () => {
       assert.equal(registered.variables.length, 1);

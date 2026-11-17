@@ -293,14 +293,18 @@ border-box，主区因此正好 36，填满行的内容盒），以及宽栏那�
 模式的提示词与工具目录，不是用户要的「另一个模式」。
 
 **为什么自己注册 persona，而不是直接用 `@deepseek-ai/dsh-persona`**：`dsh-persona` 的
-`prefix` 是静态字符串，不能每天变。聊天模式要注入网页端那句「今天是…」，日期必须每次
-组装时现算。一个 preset 子插件同时注册 `variable()`、`section({ complete: true })` 和
-`suppressRuntimeContext()`，三件事在同一个作用域、同一个生命周期里，不会出现「persona 是
-一个包、日期是另一个包、其中一个没挂上」的半成品。它还顺带避免了第三方 preset 对
-`@deepseek-ai/dsh-persona` 的额外依赖。
+`prefix` 是静态字符串，不能每天变。聊天模式只注入网页端同样会注入的日期「今天是…」，
+日期必须每次组装时现算。一个 preset 子插件同时注册 `variable()`、
+`section({ complete: true })` 和 `suppressRuntimeContext()`，三件事在同一个作用域、同一个
+生命周期里，不会出现「persona 是一个包、日期是另一个包、其中一个没挂上」的半成品。它还
+顺带避免了第三方 preset 对 `@deepseek-ai/dsh-persona` 的额外依赖。
 
-**为什么 `complete: true`**：DeepSeek 网页端的系统提示词只有身份和日期；如果不用 complete，
-DSH 还会拼上 harness 身份、部署 persona、工具指引等段落，模型看到的就不再是网页端那一句。
+**为什么不注入助手身份**：聊天模式可以用任意 API 路由，用户完全可能选非 DeepSeek 的模型；
+写死「该助手为 DeepSeek Chat，由深度求索公司创造」在别的路由上就是错的。因此 persona 只
+保留 `今天是<当天日期>。`，不写助手名字，也不写厂商名字。
+
+**为什么 `complete: true`**：聊天模式的系统提示词只保留日期；如果不用 complete，DSH 还会
+拼上 harness 身份、部署 persona、工具指引等段落，模型看到的就不再是这套精简提示词。
 `complete` 让渲染出的 persona 成为该 agent 的唯一 prompt 段落。注意它只压掉 prompt 文本，
 不压工具——工具是 wire 层的 schema，所以「没有工具」必须由 preset 不挂 `tool-*` 行来保证。
 

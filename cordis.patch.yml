@@ -1,4 +1,4 @@
-# dsh-temptask — bundle patch：插入本插件的 host 插件行。
+# dsh-temptask — bundle patch：插入本插件的 host 插件行与「聊天」preset。
 #
 # 这是一个「补丁层」文件：`dsh plugin add` 把它所在的包登记进 profile 的 bundles，
 # DSH 启动时按 cordis.yml 的合并规则应用本文件，于是插件被挂载。
@@ -27,18 +27,18 @@
     # 顺手插入这一行，用户装完插件就能在新会话/空白会话的模式选择器里看到它。
     #
     # 组成只有两行：
-    #   - chat-persona：本包自己的子插件，注册 DeepSeek 网页端那句 persona、
-    #     当天日期变量，并抑制可选运行时上下文；
+    #   - chat-persona：本包自己的子插件，注册当天日期变量、
+    #     只含日期的 persona，并抑制可选运行时上下文；
     #   - compaction：长对话自动压缩（网页端也会自动处理上下文），
     #     不挂 /compact 命令，也不挂任何工具。
     #
-    # 不要在这里加 tool-* 行：这个模式的产品定义就是「网页端能用的纯聊天」。
+    # 不要在这里加 tool-* 行：这个模式的产品定义就是「不加载任何工具的纯聊天」。
     - id: preset-chat
       name: '@deepseek-ai/dsh-agent-preset'
       config:
         id: chat
         name: '聊天'
-        description: '像 DeepSeek 网页版一样纯聊天：不加载任何工具，系统提示词只有身份和当前日期，用 API 模型对话。'
+        description: '像 DeepSeek 网页版一样纯聊天：不加载任何工具，系统提示词只有当前日期，用 API 模型对话。'
         order: 5
         plugins:
           - id: chat-persona

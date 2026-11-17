@@ -4,6 +4,17 @@
 
 发布渠道：npm [`@aeroscis/dsh-temptask`](https://www.npmjs.com/package/@aeroscis/dsh-temptask) · 源码 <https://github.com/Aeroscis/dsh-temptask>
 
+## [0.7.1] — 2026-11-17
+
+### 修复：聊天模式不再写死助手身份，只注入当天日期
+
+- **问题**：用户可能给聊天模式选任何 API 路由，提示词里写
+  「该助手为DeepSeek Chat，由深度求索公司创造」在别的模型上就是错的。
+- **修法**：persona 只剩 `今天是<当天日期>。`。日期变量、`complete` 段落、无工具、
+  自动压缩都不变；不写助手名字，也不写厂商名字。
+- **测试**：日期格式用例改名为 `formatChatDate`；persona 断言从「身份 + 日期」改为
+  「只有日期，且不含 `DeepSeek` 字样」。
+
 ## [0.7.0] — 2026-11-17
 
 ### 新增：「聊天」模式——DeepSeek 网页端式的纯聊天，走 API，不加载任何工具
